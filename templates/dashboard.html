@@ -1,0 +1,421 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — SOC IP Blocker{% endblock %}
+
+{% block extra_head %}
+<style>
+    .stat-card {
+        border: none;
+        border-radius: 1rem;
+        overflow: hidden;
+        position: relative;
+    }
+    .stat-card .card-body { position: relative; z-index: 1; }
+    .stat-card .stat-icon {
+        position: absolute;
+        right: 1rem;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 3rem;
+        opacity: 0.15;
+        z-index: 0;
+    }
+    .stat-card.card-blocked { background: linear-gradient(135deg, #6366f1, #818cf8); }
+    .stat-card.card-devices { background: linear-gradient(135deg, #3b82f6, #60a5fa); }
+    .stat-card.card-online  { background: linear-gradient(135deg, #10b981, #34d399); }
+    .stat-card.card-offline { background: linear-gradient(135deg, #ef4444, #f87171); }
+    .stat-card .display-6 { font-weight: 700; }
+
+    .blocklist-card { border-radius: 1rem; overflow: hidden; }
+    .blocklist-card .card-header {
+        background: rgba(255,255,255,0.03);
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .table th { font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.7; }
+    .table td { vertical-align: middle; }
+
+    .device-card {
+        border-radius: 0.875rem;
+        border: 1px solid rgba(255,255,255,0.06);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .device-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Summary Cards -->
+<div class="row g-3 mb-4">
+    <div class="col-6 col-lg-3">
+        <div class="card stat-card card-blocked text-white">
+            <div class="card-body py-3">
+                <div class="text-white-50 small fw-semibold mb-1">Blocked IPs</div>
+                <p class="display-6 mb-0">{{ total_blocked }}</p>
+            </div>
+            <i class="bi bi-slash-circle stat-icon"></i>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card stat-card card-devices text-white">
+            <div class="card-body py-3">
+                <div class="text-white-50 small fw-semibold mb-1">Total Devices</div>
+                <p class="display-6 mb-0">{{ total_devices }}</p>
+            </div>
+            <i class="bi bi-hdd-network stat-icon"></i>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card stat-card card-online text-white">
+            <div class="card-body py-3">
+                <div class="text-white-50 small fw-semibold mb-1">Online</div>
+                <p class="display-6 mb-0">{{ online_count }}</p>
+            </div>
+            <i class="bi bi-check-circle stat-icon"></i>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card stat-card card-offline text-white">
+            <div class="card-body py-3">
+                <div class="text-white-50 small fw-semibold mb-1">Offline</div>
+                <p class="display-6 mb-0">{{ offline_count }}</p>
+            </div>
+            <i class="bi bi-x-circle stat-icon"></i>
+        </div>
+    </div>
+</div>
+
+<!-- Add IP Form + Refresh -->
+<div class="row mb-4 g-3 align-items-end">
+    <div class="col-lg-8">
+        <form id="add-ip-form" class="row g-2 align-items-end">
+            <div class="col-sm-4">
+                <label for="ip_address" class="form-label small fw-semibold">IP Address / CIDR</label>
+                <input type="text" class="form-control" id="ip_address" name="ip_address" placeholder="e.g. 192.168.1.1 or 10.0.0.0/24" required>
+            </div>
+            <div class="col-sm-4">
+                <label for="note" class="form-label small fw-semibold">Note (optional)</label>
+                <input type="text" class="form-control" id="note" name="note" placeholder="Reason for blocking">
+            </div>
+            <div class="col-sm-auto">
+                <button type="submit" class="btn btn-primary" id="add-ip-btn">
+                    <i class="bi bi-plus-circle me-1"></i>Block IP
+                </button>
+                <span id="add-ip-result" class="ms-2"></span>
+            </div>
+        </form>
+    </div>
+    <div class="col-lg-4 text-lg-end">
+        <button type="button" class="btn btn-outline-secondary me-2" onclick="location.reload()">
+            <i class="bi bi-arrow-clockwise me-1"></i>Refresh Web Page
+        </button>
+        <button type="button" class="btn btn-outline-primary" id="refresh-all-btn">
+            <i class="bi bi-arrow-repeat me-1"></i>Refresh All Devices
+        </button>
+        <span id="refresh-confirm" class="d-none ms-2">
+            <span class="text-warning small me-1">Health check + sync all devices?</span>
+            <button class="btn btn-sm btn-success" id="refresh-yes-btn">Yes</button>
+            <button class="btn btn-sm btn-secondary ms-1" id="refresh-no-btn">No</button>
+        </span>
+        <span id="refresh-result" class="ms-2 small"></span>
+    </div>
+</div>
+
+<!-- Blocklist Table -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card blocklist-card">
+            <div class="card-header d-flex justify-content-between align-items-center py-3">
+                <h5 class="mb-0 fw-semibold"><i class="bi bi-list-ul me-2"></i>Blocklist</h5>
+                <input type="text" id="blocklist-search" class="form-control form-control-sm" style="max-width:250px" placeholder="Search blocklist...">
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                <table class="table table-hover mb-0" id="blocklist-table">
+                    <thead>
+                        <tr>
+                            <th class="sortable" data-col="0">IP Address / CIDR</th>
+                            <th class="sortable" data-col="1">Added By</th>
+                            <th class="sortable" data-col="2">Timestamp</th>
+                            <th class="sortable" data-col="3">Note</th>
+                            <th>Push Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in blocklist %}
+                        <tr>
+                            <td><code>{{ entry.ip_address }}</code></td>
+                            <td>{{ entry.added_by }}</td>
+                            <td>{{ entry.added_at }}</td>
+                            <td>{{ entry.note or '—' }}</td>
+                            <td>
+                                {% for ps in entry.push_statuses %}
+                                    <span class="badge {% if ps.status == 'success' %}bg-success{% elif ps.status == 'failed' %}bg-danger{% else %}bg-warning text-dark{% endif %}" title="{{ ps.hostname }} ({{ ps.device_type }})">
+                                        {{ ps.friendly_name or ps.hostname }}: {{ ps.status }}
+                                    </span>
+                                {% else %}
+                                    <span class="text-muted">No devices</span>
+                                {% endfor %}
+                            </td>
+                            <td>
+                                <div class="d-flex align-items-center gap-1">
+                                    <button class="btn btn-sm btn-outline-danger remove-ip-btn" data-ip="{{ entry.ip_address }}">
+                                        <i class="bi bi-trash me-1"></i>Remove
+                                    </button>
+                                    <span class="remove-confirm d-none" data-ip="{{ entry.ip_address }}">
+                                        <span class="text-warning small me-1">Remove?</span>
+                                        <button class="btn btn-sm btn-danger remove-yes-btn" data-ip="{{ entry.ip_address }}">Yes</button>
+                                        <button class="btn btn-sm btn-secondary remove-no-btn ms-1">No</button>
+                                    </span>
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" class="text-center text-muted py-4">
+                                <i class="bi bi-shield-check d-block mb-2" style="font-size:2rem;opacity:0.3"></i>
+                                No blocked IPs
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Device Status Panel -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card blocklist-card">
+            <div class="card-header py-3">
+                <h5 class="mb-0 fw-semibold"><i class="bi bi-hdd-stack me-2"></i>Device Status</h5>
+            </div>
+            <div class="card-body">
+                {% if devices %}
+                <div class="row g-3">
+                    {% for device in devices %}
+                    <div class="col-md-4 col-lg-3">
+                        <div class="card device-card h-100">
+                            <div class="card-body text-center py-4">
+                                <div class="mb-2" style="font-size:2rem">
+                                    {% if device.device_type == 'pfsense' %}
+                                    <i class="bi bi-fire text-warning"></i>
+                                    {% else %}
+                                    <i class="bi bi-terminal text-info"></i>
+                                    {% endif %}
+                                </div>
+                                <h6 class="card-title fw-semibold mb-1">{{ device.friendly_name or device.hostname }}</h6>
+                                {% if device.friendly_name %}
+                                <p class="card-text mb-1"><small class="text-body-secondary"><code>{{ device.hostname }}</code></small></p>
+                                {% endif %}
+                                <p class="card-text mb-2">
+                                    <small class="text-body-secondary">{{ device.device_type | capitalize }}</small>
+                                </p>
+                                <span class="badge rounded-pill {% if device.status == 'online' %}bg-success{% elif device.status == 'offline' %}bg-danger{% else %}bg-secondary{% endif %}">
+                                    <i class="bi {% if device.status == 'online' %}bi-circle-fill{% elif device.status == 'offline' %}bi-circle{% else %}bi-question-circle{% endif %} me-1" style="font-size:0.5rem;vertical-align:middle"></i>
+                                    {{ device.status | capitalize }}
+                                </span>
+                                {% if device.total_blocked is defined and device.total_blocked > 0 %}
+                                <div class="mt-2">
+                                    <small class="text-body-secondary">{{ device.synced_count }}/{{ device.total_blocked }} rules synced</small>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="text-center py-4">
+                    <i class="bi bi-hdd-network d-block mb-2" style="font-size:2rem;opacity:0.3"></i>
+                    <p class="text-muted mb-0">No devices registered. <a href="{{ url_for('settings.index') }}">Add devices in Settings</a>.</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function() {
+    // Search / filter
+    var searchInput = document.getElementById('blocklist-search');
+    var table = document.getElementById('blocklist-table');
+    if (searchInput && table) {
+        searchInput.addEventListener('input', function() {
+            var filter = this.value.toLowerCase();
+            var rows = table.querySelectorAll('tbody tr');
+            rows.forEach(function(row) {
+                var text = row.textContent.toLowerCase();
+                row.style.display = text.indexOf(filter) > -1 ? '' : 'none';
+            });
+        });
+    }
+
+    // Sortable columns
+    var headers = table ? table.querySelectorAll('th.sortable') : [];
+    headers.forEach(function(header) {
+        header.style.cursor = 'pointer';
+        header.addEventListener('click', function() {
+            var colIndex = parseInt(this.getAttribute('data-col'));
+            var tbody = table.querySelector('tbody');
+            var rows = Array.from(tbody.querySelectorAll('tr'));
+            var asc = this.getAttribute('data-order') !== 'asc';
+            this.setAttribute('data-order', asc ? 'asc' : 'desc');
+            rows.sort(function(a, b) {
+                var aText = (a.children[colIndex] ? a.children[colIndex].textContent.trim() : '');
+                var bText = (b.children[colIndex] ? b.children[colIndex].textContent.trim() : '');
+                return asc ? aText.localeCompare(bText) : bText.localeCompare(aText);
+            });
+            rows.forEach(function(row) { tbody.appendChild(row); });
+        });
+    });
+
+    // AJAX add IP
+    var addForm = document.getElementById('add-ip-form');
+    if (addForm) {
+        addForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            var btn = document.getElementById('add-ip-btn');
+            var resultSpan = document.getElementById('add-ip-result');
+            var ip = document.getElementById('ip_address').value.trim();
+            var note = document.getElementById('note').value.trim();
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Adding...';
+            resultSpan.textContent = '';
+
+            fetch("{{ url_for('blocklist.add_ip') }}", {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ip_address: ip, note: note})
+            })
+            .then(function(resp) { return resp.json(); })
+            .then(function(data) {
+                resultSpan.textContent = data.message;
+                resultSpan.className = 'ms-2 ' + (data.success ? 'text-success' : 'text-danger');
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-plus-circle me-1"></i>Block IP';
+                if (data.success) {
+                    document.getElementById('ip_address').value = '';
+                    document.getElementById('note').value = '';
+                    setTimeout(function() { location.reload(); }, 1500);
+                }
+            })
+            .catch(function() {
+                resultSpan.textContent = 'Request failed.';
+                resultSpan.className = 'ms-2 text-danger';
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-plus-circle me-1"></i>Block IP';
+            });
+        });
+    }
+
+    // AJAX remove IP — inline confirmation
+    document.querySelectorAll('.remove-ip-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var ip = this.getAttribute('data-ip');
+            // Show inline confirm, hide the remove button
+            this.classList.add('d-none');
+            var confirmSpan = this.parentElement.querySelector('.remove-confirm[data-ip="' + ip + '"]');
+            if (confirmSpan) confirmSpan.classList.remove('d-none');
+        });
+    });
+
+    document.querySelectorAll('.remove-no-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var confirmSpan = this.closest('.remove-confirm');
+            confirmSpan.classList.add('d-none');
+            confirmSpan.parentElement.querySelector('.remove-ip-btn').classList.remove('d-none');
+        });
+    });
+
+    document.querySelectorAll('.remove-yes-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var ip = this.getAttribute('data-ip');
+            var row = this.closest('tr');
+            var confirmSpan = this.closest('.remove-confirm');
+            this.disabled = true;
+            this.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+            fetch("{{ url_for('blocklist.remove_ip', ip='__IP__') }}".replace('__IP__', ip), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            })
+            .then(function(resp) { return resp.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    row.style.transition = 'opacity 0.3s';
+                    row.style.opacity = '0';
+                    setTimeout(function() { row.remove(); }, 300);
+                } else {
+                    confirmSpan.innerHTML = '<span class="text-danger small">' + data.message + '</span>';
+                }
+            })
+            .catch(function() {
+                confirmSpan.innerHTML = '<span class="text-danger small">Request failed.</span>';
+            });
+        });
+    });
+
+    // AJAX Refresh All Devices — inline confirmation
+    var refreshAllBtn = document.getElementById('refresh-all-btn');
+    var refreshConfirm = document.getElementById('refresh-confirm');
+    var refreshYesBtn = document.getElementById('refresh-yes-btn');
+    var refreshNoBtn = document.getElementById('refresh-no-btn');
+
+    if (refreshAllBtn) {
+        refreshAllBtn.addEventListener('click', function() {
+            refreshAllBtn.classList.add('d-none');
+            refreshConfirm.classList.remove('d-none');
+        });
+    }
+
+    if (refreshNoBtn) {
+        refreshNoBtn.addEventListener('click', function() {
+            refreshConfirm.classList.add('d-none');
+            refreshAllBtn.classList.remove('d-none');
+        });
+    }
+
+    if (refreshYesBtn) {
+        refreshYesBtn.addEventListener('click', function() {
+            var resultSpan = document.getElementById('refresh-result');
+            refreshConfirm.classList.add('d-none');
+            refreshAllBtn.classList.remove('d-none');
+            refreshAllBtn.disabled = true;
+            refreshAllBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Refreshing All...';
+            resultSpan.textContent = '';
+
+            fetch("{{ url_for('settings.refresh_all') }}", {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            })
+            .then(function(resp) { return resp.json(); })
+            .then(function(data) {
+                resultSpan.textContent = data.message;
+                resultSpan.className = 'ms-2 small ' + (data.success ? 'text-success' : 'text-danger');
+                refreshAllBtn.disabled = false;
+                refreshAllBtn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>Refresh All Devices';
+                if (data.success) {
+                    setTimeout(function() { location.reload(); }, 2000);
+                }
+            })
+            .catch(function() {
+                resultSpan.textContent = 'Request failed.';
+                resultSpan.className = 'ms-2 small text-danger';
+                refreshAllBtn.disabled = false;
+                refreshAllBtn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>Refresh All Devices';
+            });
+        });
+    }
+})();
+</script>
+{% endblock %}

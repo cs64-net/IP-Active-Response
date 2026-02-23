@@ -1,0 +1,15 @@
+services:
+  soc-ip-blocker:
+    build: .
+    container_name: soc-ip-blocker
+    ports:
+      - "5000:5000"
+    volumes:
+      - soc-data:/data
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - DATABASE_PATH=/data/soc_ip_blocker.db
+    restart: unless-stopped
+
+volumes:
+  soc-data:

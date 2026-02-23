@@ -1,0 +1,1305 @@
+{% extends "base.html" %}
+{% block title %}Settings — SOC IP Blocker{% endblock %}
+
+{% block extra_head %}
+<style>
+    .settings-card {
+        border-radius: 1rem;
+        border: 1px solid rgba(255,255,255,0.06);
+        overflow: hidden;
+    }
+    .settings-card .card-header {
+        background: rgba(255,255,255,0.03);
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+        padding: 1rem 1.25rem;
+    }
+    .settings-card .card-header h5 { font-weight: 600; }
+    .table th {
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        opacity: 0.7;
+    }
+    .table td { vertical-align: middle; }
+    .action-btn-group .btn { margin-right: 0.25rem; margin-bottom: 0.25rem; }
+    .modal-content {
+        border-radius: 1rem;
+        border: 1px solid rgba(255,255,255,0.08);
+    }
+    .wizard-type-card:hover {
+        border-color: rgba(99,102,241,0.5) !important;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    }
+    /* Fix dropdown clipping in table */
+    .table-responsive { overflow: visible !important; }
+    .settings-card .card-body.p-0 { overflow: visible; }
+    /* Ensure modals render above everything */
+    .modal { z-index: 1055; }
+    .modal-backdrop { z-index: 1050; }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Application Settings -->
+<div class="card settings-card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-sliders me-2"></i>Application Settings</h5>
+    </div>
+    <div class="card-body">
+        <form method="POST" action="{{ url_for('settings.update') }}">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-4">
+                    <label for="monitor_interval" class="form-label small fw-semibold">Monitor Interval (seconds)</label>
+                    <input type="number" class="form-control" id="monitor_interval" name="monitor_interval"
+                           value="{{ settings.monitor_interval }}" min="1" required>
+                </div>
+                <div class="col-md-4">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-lg me-1"></i>Save Settings
+                    </button>
+                </div>
+            </div>
+        </form>
+        <div class="row g-3 mt-2">
+            <div class="col-12">
+                <label class="form-label small fw-semibold">
+                    <i class="bi bi-shield-lock me-1"></i>Protected IP Ranges
+                    <small class="text-body-secondary fw-normal ms-1">IPs within these ranges cannot be blocked</small>
+                </label>
+                <div class="d-flex gap-2 mb-2">
+                    <input type="text" class="form-control form-control-sm" id="new-protected-range"
+                           placeholder="e.g. 10.0.0.0/8" style="max-width:300px;font-family:'Courier New',Courier,monospace;font-size:0.85rem">
+                    <button type="button" class="btn btn-sm btn-outline-success" id="add-protected-range-btn">
+                        <i class="bi bi-plus-lg me-1"></i>Add
+                    </button>
+                </div>
+                <div id="protected-range-result" class="small mb-2"></div>
+                <div id="protected-ranges-list">
+                    <span class="text-muted small">Loading...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- User Management -->
+<div class="card settings-card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-people me-2"></i>User Management</h5>
+        <button class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#addUserModal">
+            <i class="bi bi-person-plus me-1"></i>Add User
+        </button>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+        <table class="table table-hover mb-0" id="users-table">
+            <thead>
+                <tr>
+                    <th>Username</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="users-tbody">
+                <tr><td colspan="2" class="text-center text-muted py-3">Loading...</td></tr>
+            </tbody>
+        </table>
+        </div>
+    </div>
+</div>
+
+<!-- Add User Modal -->
+<div class="modal fade" id="addUserModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header border-bottom border-opacity-10">
+                <h5 class="modal-title fw-semibold"><i class="bi bi-person-plus me-2"></i>Add User</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Username</label>
+                    <input type="text" class="form-control" id="new-username" minlength="3" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">Password</label>
+                    <input type="password" class="form-control" id="new-password" minlength="6" required>
+                </div>
+                <div id="add-user-result"></div>
+            </div>
+            <div class="modal-footer border-top border-opacity-10">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-success" id="add-user-btn">
+                    <i class="bi bi-check-lg me-1"></i>Create User
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Change Password Modal -->
+<div class="modal fade" id="changePasswordModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header border-bottom border-opacity-10">
+                <h5 class="modal-title fw-semibold"><i class="bi bi-key me-2"></i>Change Password</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="cp-username">
+                <div class="mb-3" id="cp-current-group">
+                    <label class="form-label small fw-semibold">Current Password</label>
+                    <input type="password" class="form-control" id="cp-current-password">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-semibold">New Password</label>
+                    <input type="password" class="form-control" id="cp-new-password" minlength="6" required>
+                </div>
+                <div id="cp-result"></div>
+            </div>
+            <div class="modal-footer border-top border-opacity-10">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="cp-save-btn">
+                    <i class="bi bi-check-lg me-1"></i>Change Password
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Device Management -->
+<div class="card settings-card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-hdd-network me-2"></i>Managed Devices</h5>
+        <div>
+            <button class="btn btn-sm btn-outline-primary me-2" id="refresh-all-devices-btn">
+                <i class="bi bi-arrow-repeat me-1"></i>Refresh All
+            </button>
+            <button class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#addDeviceWizard">
+                <i class="bi bi-plus-circle me-1"></i>Add Device
+            </button>
+        </div>
+    </div>
+    <div class="card-body p-0">
+        <span id="refresh-all-result" class="ms-3 small"></span>
+        <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>Device</th>
+                    <th>Type</th>
+                    <th>Block Method</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for device in devices %}
+                <tr>
+                    <td>
+                        <span class="fw-semibold">{{ device.friendly_name or device.hostname }}</span>
+                        {% if device.friendly_name %}
+                        <br><small class="text-body-secondary"><code>{{ device.hostname }}</code></small>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if device.device_type == 'pfsense' %}
+                        <span><i class="bi bi-fire text-warning me-1"></i>pfSense</span>
+                        {% else %}
+                        <span><i class="bi bi-terminal text-info me-1"></i>Linux</span>
+                        {% endif %}
+                    </td>
+                    <td><span class="badge bg-secondary bg-opacity-50">{{ device.block_method or 'null_route' }}</span></td>
+                    <td>
+                        {% if device.status == 'online' %}
+                            <span id="status-badge-{{ device.id }}" class="badge rounded-pill bg-success bg-opacity-25"><i class="bi bi-circle-fill text-success me-1" style="font-size:.5rem"></i>Online</span>
+                        {% elif device.status == 'offline' %}
+                            <span id="status-badge-{{ device.id }}" class="badge rounded-pill bg-danger bg-opacity-25"><i class="bi bi-circle-fill text-danger me-1" style="font-size:.5rem"></i>Offline</span>
+                        {% else %}
+                            <span id="status-badge-{{ device.id }}" class="badge rounded-pill bg-warning bg-opacity-25"><i class="bi bi-circle-fill text-warning me-1" style="font-size:.5rem"></i>Unknown</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="d-flex flex-wrap align-items-center gap-1">
+                            <button class="btn btn-sm btn-outline-info test-btn" data-device-id="{{ device.id }}">
+                                <i class="bi bi-plug me-1"></i>Test
+                            </button>
+                            <button class="btn btn-sm btn-outline-success sync-btn" data-device-id="{{ device.id }}">
+                                <i class="bi bi-arrow-repeat me-1"></i>Sync
+                            </button>
+                            {% if device.device_type == 'pfsense' %}
+                            <button class="btn btn-sm btn-outline-warning floating-rule-btn" data-device-id="{{ device.id }}">
+                                <i class="bi bi-shield-plus me-1"></i>Floating Rule
+                            </button>
+                            {% endif %}
+                            <div class="dropdown d-inline-block">
+                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" data-bs-boundary="viewport" aria-expanded="false">
+                                    <i class="bi bi-three-dots"></i>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-dark">
+                                    <li>
+                                        <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#editModal{{ device.id }}">
+                                            <i class="bi bi-pencil me-2"></i>Edit
+                                        </a>
+                                    </li>
+                                    <li>
+                                        <a class="dropdown-item text-danger" href="#" data-bs-toggle="modal" data-bs-target="#removeModal{{ device.id }}">
+                                            <i class="bi bi-trash me-2"></i>Remove
+                                        </a>
+                                    </li>
+                                </ul>
+                            </div>
+                            <span class="test-result small" id="test-result-{{ device.id }}"></span>
+                            <span class="floating-rule-result small" id="floating-result-{{ device.id }}"></span>
+                            <span class="sync-result small" id="sync-result-{{ device.id }}"></span>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="text-center text-muted py-4">
+                        <i class="bi bi-hdd-network d-block mb-2" style="font-size:2rem;opacity:0.3"></i>
+                        No devices registered.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Modals (rendered outside table to avoid z-index/backdrop issues) -->
+{% for device in devices %}
+<div class="modal fade" id="editModal{{ device.id }}" tabindex="-1" aria-labelledby="editModalLabel{{ device.id }}" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('devices.edit_device', device_id=device.id) }}">
+                <div class="modal-header border-bottom border-opacity-10">
+                    <h5 class="modal-title fw-semibold" id="editModalLabel{{ device.id }}">
+                        <i class="bi bi-pencil-square me-2"></i>Edit {{ device.friendly_name or device.hostname }}
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Friendly Name</label>
+                        <input type="text" class="form-control" name="friendly_name" value="{{ device.friendly_name or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Hostname</label>
+                        <input type="text" class="form-control" name="hostname" value="{{ device.hostname }}">
+                    </div>
+                    {% if device.device_type == 'pfsense' %}
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Username</label>
+                        <input type="text" class="form-control" name="web_username" value="{{ device.web_username or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Password</label>
+                        <input type="password" class="form-control" name="web_password" placeholder="Leave blank to keep current">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Block Method</label>
+                        <select class="form-select block-method-select" name="block_method" data-device-id="{{ device.id }}" data-current-method="{{ device.block_method or 'null_route' }}">
+                            <option value="null_route" {% if device.block_method == 'null_route' %}selected{% endif %}>Null Route</option>
+                            <option value="floating_rule" {% if device.block_method == 'floating_rule' %}selected{% endif %}>Floating Rule</option>
+                        </select>
+                        <div class="switch-warning" id="switch-warning-{{ device.id }}" style="display:none">
+                            <div class="form-text text-warning mb-2">
+                                <i class="bi bi-exclamation-triangle me-1"></i>
+                                Changing block method will set up new rules on the firewall.
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input cleanup-old-check" type="checkbox" id="cleanup-old-{{ device.id }}" data-device-id="{{ device.id }}" checked>
+                                <label class="form-check-label small" for="cleanup-old-{{ device.id }}" id="cleanup-label-{{ device.id }}">
+                                    Remove old rules from pfSense
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Port</label>
+                        <input type="number" class="form-control" name="ssh_port" value="{{ device.ssh_port or 22 }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Username</label>
+                        <input type="text" class="form-control" name="ssh_username" value="{{ device.ssh_username or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Password</label>
+                        <input type="password" class="form-control" name="ssh_password" placeholder="Leave blank to keep current">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Key (paste private key)</label>
+                        <textarea class="form-control" name="ssh_key" rows="6"
+                                  style="font-family:'Courier New',Courier,monospace;font-size:0.8rem"
+                                  placeholder="Paste SSH private key content">{{ device.ssh_key or '' }}</textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Key Path</label>
+                        <input type="text" class="form-control" name="ssh_key_path" value="{{ device.ssh_key_path or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Sudo Password</label>
+                        <input type="password" class="form-control" name="sudo_password" placeholder="Leave blank to use SSH password">
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="modal-footer border-top border-opacity-10">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary save-device-btn" data-device-id="{{ device.id }}">
+                        <i class="bi bi-check-lg me-1"></i>Save Changes
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endfor %}
+
+<!-- Remove Device Modals -->
+{% for device in devices %}
+<div class="modal fade" id="removeModal{{ device.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <div class="modal-header border-bottom border-opacity-10">
+                <h5 class="modal-title fw-semibold">
+                    <i class="bi bi-trash text-danger me-2"></i>Remove Device
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-3">Remove <strong>{{ device.friendly_name or device.hostname }}</strong>?</p>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="cleanup-device-{{ device.id }}" checked>
+                    <label class="form-check-label small" for="cleanup-device-{{ device.id }}">
+                        {% if device.device_type == 'pfsense' and device.block_method == 'floating_rule' %}
+                        Remove floating rules and alias from device
+                        {% elif device.device_type == 'linux' %}
+                        Remove null routes from device
+                        {% else %}
+                        Remove null routes from device
+                        {% endif %}
+                    </label>
+                </div>
+                <div id="remove-result-{{ device.id }}" class="mt-2"></div>
+            </div>
+            <div class="modal-footer border-top border-opacity-10">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger btn-sm remove-device-btn" data-device-id="{{ device.id }}">
+                    <i class="bi bi-trash me-1"></i>Remove
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endfor %}
+
+<!-- Add Device Wizard Modal -->
+<div class="modal fade" id="addDeviceWizard" tabindex="-1" aria-labelledby="addDeviceWizardLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header border-bottom border-opacity-10">
+                <h5 class="modal-title fw-semibold" id="addDeviceWizardLabel">
+                    <i class="bi bi-plus-circle me-2"></i>Add New Device
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <!-- Progress indicator -->
+                <div class="d-flex justify-content-center mb-4">
+                    <div class="d-flex align-items-center">
+                        <span class="badge rounded-pill bg-primary wizard-step-badge" id="step-badge-1">1</span>
+                        <span class="small ms-1 me-3 wizard-step-label" id="step-label-1">Type</span>
+                        <div style="width:40px;height:2px;background:rgba(255,255,255,0.15)" class="me-3"></div>
+                        <span class="badge rounded-pill bg-secondary wizard-step-badge" id="step-badge-2">2</span>
+                        <span class="small ms-1 me-3 wizard-step-label text-muted" id="step-label-2">Details</span>
+                        <div style="width:40px;height:2px;background:rgba(255,255,255,0.15)" class="me-3"></div>
+                        <span class="badge rounded-pill bg-secondary wizard-step-badge" id="step-badge-3">3</span>
+                        <span class="small ms-1 wizard-step-label text-muted" id="step-label-3">Setup</span>
+                    </div>
+                </div>
+
+                <!-- Step 1: Choose Device Type -->
+                <div id="wizard-step-1">
+                    <h6 class="text-center mb-3">Choose Device Type</h6>
+                    <div class="row g-3 justify-content-center">
+                        <div class="col-5">
+                            <div class="card h-100 wizard-type-card" data-type="pfsense" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-4" style="background:linear-gradient(135deg,rgba(234,88,12,0.1),rgba(251,146,60,0.05));border-radius:0.875rem">
+                                    <i class="bi bi-fire" style="font-size:3rem;color:#f97316"></i>
+                                    <h5 class="mt-3 mb-1 fw-semibold">pfSense</h5>
+                                    <small class="text-body-secondary">Firewall with web API</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-5">
+                            <div class="card h-100 wizard-type-card" data-type="linux" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-4" style="background:linear-gradient(135deg,rgba(59,130,246,0.1),rgba(96,165,250,0.05));border-radius:0.875rem">
+                                    <i class="bi bi-terminal" style="font-size:3rem;color:#3b82f6"></i>
+                                    <h5 class="mt-3 mb-1 fw-semibold">Linux</h5>
+                                    <small class="text-body-secondary">SSH null route blocking</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 2: Device Details -->
+                <div id="wizard-step-2" style="display:none">
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Friendly Name <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="wiz-friendly-name" placeholder="e.g. Main Firewall" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Hostname / IP <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="wiz-hostname" placeholder="e.g. 192.168.1.1" required>
+                    </div>
+
+                    <!-- pfSense fields -->
+                    <div id="wiz-pfsense-fields" style="display:none">
+                        <div class="row g-3">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Username <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-pf-username" placeholder="admin">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Password <span class="text-danger">*</span></label>
+                                <input type="password" class="form-control" id="wiz-pf-password">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Block Method</label>
+                            <select class="form-select" id="wiz-pf-block-method">
+                                <option value="floating_rule" selected>Floating Rule (recommended)</option>
+                                <option value="null_route">Null Route</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Linux fields -->
+                    <div id="wiz-linux-fields" style="display:none">
+                        <div class="row g-3">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label small fw-semibold">SSH Port</label>
+                                <input type="number" class="form-control" id="wiz-linux-port" value="22">
+                            </div>
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label small fw-semibold">SSH Username <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-linux-username" placeholder="root">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">SSH Key (paste private key content)</label>
+                            <textarea class="form-control" id="wiz-linux-ssh-key" rows="8"
+                                      style="font-family:'Courier New',Courier,monospace;font-size:0.8rem"
+                                      placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">SSH Password <small class="text-body-secondary">(alternative to key)</small></label>
+                            <input type="password" class="form-control" id="wiz-linux-password">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Sudo Password <small class="text-body-secondary">(defaults to SSH password)</small></label>
+                            <input type="password" class="form-control" id="wiz-linux-sudo-password">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 3: Test & Setup -->
+                <div id="wizard-step-3" style="display:none">
+                    <div class="mb-4">
+                        <h6 class="mb-3">Connectivity Test</h6>
+                        <div id="wiz-test-status" class="d-flex align-items-center p-3 rounded" style="background:rgba(255,255,255,0.03)">
+                            <span class="spinner-border spinner-border-sm me-2" id="wiz-test-spinner"></span>
+                            <span id="wiz-test-text">Testing connection...</span>
+                            <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" id="wiz-retest-btn" style="display:none">
+                                <i class="bi bi-arrow-repeat me-1"></i>Retest
+                            </button>
+                        </div>
+                    </div>
+                    <div id="wiz-setup-options" style="display:none">
+                        <h6 class="mb-3">Setup Options</h6>
+                        <div id="wiz-floating-rule-option" style="display:none" class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox" id="wiz-create-floating" checked>
+                            <label class="form-check-label" for="wiz-create-floating">Create floating rules now</label>
+                        </div>
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" id="wiz-sync-blocklist" checked>
+                            <label class="form-check-label" for="wiz-sync-blocklist">Sync existing blocklist to this device</label>
+                        </div>
+                    </div>
+                    <div id="wiz-setup-result" class="mt-3"></div>
+                </div>
+            </div>
+            <div class="modal-footer border-top border-opacity-10">
+                <button type="button" class="btn btn-secondary" id="wiz-back-btn" style="display:none">
+                    <i class="bi bi-arrow-left me-1"></i>Back
+                </button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="wiz-next-btn" disabled>
+                    Next <i class="bi bi-arrow-right ms-1"></i>
+                </button>
+                <button type="button" class="btn btn-success" id="wiz-finish-btn" style="display:none">
+                    <i class="bi bi-check-lg me-1"></i>Finish
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function() {
+    // === User Management ===
+    var currentUser = "{{ session.get('user', '') }}";
+
+    function loadUsers() {
+        fetch("{{ url_for('auth.list_users') }}")
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var tbody = document.getElementById('users-tbody');
+            if (!data.users || data.users.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="2" class="text-center text-muted py-3">No users found.</td></tr>';
+                return;
+            }
+            var html = '';
+            data.users.forEach(function(u) {
+                html += '<tr><td class="fw-semibold">' + u.username;
+                if (u.username === currentUser) html += ' <span class="badge bg-primary bg-opacity-25 ms-1">you</span>';
+                html += '</td><td>';
+                html += '<button class="btn btn-sm btn-outline-primary me-1 cp-btn" data-username="' + u.username + '"><i class="bi bi-key me-1"></i>Password</button>';
+                if (u.username !== currentUser) {
+                    html += '<button class="btn btn-sm btn-outline-danger remove-user-btn" data-username="' + u.username + '"><i class="bi bi-trash me-1"></i>Remove</button>';
+                }
+                html += '</td></tr>';
+            });
+            tbody.innerHTML = html;
+
+            // Bind change password buttons
+            document.querySelectorAll('.cp-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    var username = this.getAttribute('data-username');
+                    document.getElementById('cp-username').value = username;
+                    document.getElementById('cp-current-password').value = '';
+                    document.getElementById('cp-new-password').value = '';
+                    document.getElementById('cp-result').innerHTML = '';
+                    // Show current password field only for own account
+                    document.getElementById('cp-current-group').style.display = (username === currentUser) ? '' : 'none';
+                    var modal = new bootstrap.Modal(document.getElementById('changePasswordModal'));
+                    modal.show();
+                });
+            });
+
+            // Bind remove user buttons
+            document.querySelectorAll('.remove-user-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    var username = this.getAttribute('data-username');
+                    if (!confirm('Remove user "' + username + '"? This cannot be undone.')) return;
+                    fetch("{{ url_for('auth.remove_user') }}", {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({username: username})
+                    })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data.success) { loadUsers(); } else { alert(data.message); }
+                    })
+                    .catch(function() { alert('Request failed.'); });
+                });
+            });
+        })
+        .catch(function() {
+            document.getElementById('users-tbody').innerHTML = '<tr><td colspan="2" class="text-center text-danger py-3">Failed to load users.</td></tr>';
+        });
+    }
+    loadUsers();
+
+    // Add user
+    document.getElementById('add-user-btn').addEventListener('click', function() {
+        var username = document.getElementById('new-username').value.trim();
+        var password = document.getElementById('new-password').value.trim();
+        var resultDiv = document.getElementById('add-user-result');
+
+        if (!username || username.length < 3) { resultDiv.innerHTML = '<div class="text-danger small">Username must be at least 3 characters.</div>'; return; }
+        if (!password || password.length < 6) { resultDiv.innerHTML = '<div class="text-danger small">Password must be at least 6 characters.</div>'; return; }
+
+        this.disabled = true;
+        this.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Creating...';
+        var btn = this;
+
+        fetch("{{ url_for('auth.add_user') }}", {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({username: username, password: password})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            resultDiv.innerHTML = '<div class="' + (data.success ? 'text-success' : 'text-danger') + ' small">' + data.message + '</div>';
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Create User';
+            if (data.success) {
+                document.getElementById('new-username').value = '';
+                document.getElementById('new-password').value = '';
+                loadUsers();
+                setTimeout(function() { bootstrap.Modal.getInstance(document.getElementById('addUserModal')).hide(); }, 1000);
+            }
+        })
+        .catch(function() {
+            resultDiv.innerHTML = '<div class="text-danger small">Request failed.</div>';
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Create User';
+        });
+    });
+
+    // Change password
+    document.getElementById('cp-save-btn').addEventListener('click', function() {
+        var username = document.getElementById('cp-username').value;
+        var currentPw = document.getElementById('cp-current-password').value;
+        var newPw = document.getElementById('cp-new-password').value.trim();
+        var resultDiv = document.getElementById('cp-result');
+
+        if (!newPw || newPw.length < 6) { resultDiv.innerHTML = '<div class="text-danger small">New password must be at least 6 characters.</div>'; return; }
+
+        var payload = {new_password: newPw};
+        if (username === currentUser) {
+            payload.current_password = currentPw;
+        } else {
+            payload.username = username;
+        }
+
+        this.disabled = true;
+        var btn = this;
+
+        fetch("{{ url_for('auth.change_password') }}", {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            resultDiv.innerHTML = '<div class="' + (data.success ? 'text-success' : 'text-danger') + ' small">' + data.message + '</div>';
+            btn.disabled = false;
+            if (data.success) {
+                setTimeout(function() { bootstrap.Modal.getInstance(document.getElementById('changePasswordModal')).hide(); }, 1000);
+            }
+        })
+        .catch(function() {
+            resultDiv.innerHTML = '<div class="text-danger small">Request failed.</div>';
+            btn.disabled = false;
+        });
+    });
+
+    // === Existing button handlers ===
+    document.querySelectorAll('.test-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var deviceId = this.getAttribute('data-device-id');
+            var resultSpan = document.getElementById('test-result-' + deviceId);
+            resultSpan.textContent = 'Testing...';
+            resultSpan.className = 'test-result small text-muted';
+
+            fetch("{{ url_for('devices.test_device', device_id=0) }}".replace('/0', '/' + deviceId), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            })
+            .then(function(resp) { return resp.json(); })
+            .then(function(data) {
+                resultSpan.textContent = data.message;
+                resultSpan.className = 'test-result small ' + (data.success ? 'text-success' : 'text-danger');
+                // Update the status badge in the device row
+                var statusBadge = document.getElementById('status-badge-' + deviceId);
+                if (statusBadge && data.status) {
+                    if (data.status === 'online') {
+                        statusBadge.className = 'badge rounded-pill bg-success bg-opacity-25';
+                        statusBadge.innerHTML = '<i class="bi bi-circle-fill text-success me-1" style="font-size:.5rem"></i>Online';
+                    } else {
+                        statusBadge.className = 'badge rounded-pill bg-danger bg-opacity-25';
+                        statusBadge.innerHTML = '<i class="bi bi-circle-fill text-danger me-1" style="font-size:.5rem"></i>Offline';
+                    }
+                }
+            })
+            .catch(function() {
+                resultSpan.textContent = 'Request failed.';
+                resultSpan.className = 'test-result small text-danger';
+            });
+        });
+    });
+
+    document.querySelectorAll('.floating-rule-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var deviceId = this.getAttribute('data-device-id');
+            var resultSpan = document.getElementById('floating-result-' + deviceId);
+            var originalHtml = this.innerHTML;
+            this.disabled = true;
+            this.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Creating...';
+            resultSpan.textContent = '';
+
+            fetch("{{ url_for('settings.create_floating_rule', device_id=0) }}".replace('/0', '/' + deviceId), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            })
+            .then(function(resp) { return resp.json(); })
+            .then(function(data) {
+                resultSpan.textContent = data.message;
+                resultSpan.className = 'floating-rule-result small ' + (data.success ? 'text-success' : 'text-danger');
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            })
+            .catch(function() {
+                resultSpan.textContent = 'Request failed.';
+                resultSpan.className = 'floating-rule-result small text-danger';
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            });
+        });
+    });
+
+    document.querySelectorAll('.sync-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var deviceId = this.getAttribute('data-device-id');
+            var resultSpan = document.getElementById('sync-result-' + deviceId);
+            var originalHtml = this.innerHTML;
+            this.disabled = true;
+            this.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Syncing...';
+            resultSpan.textContent = '';
+
+            fetch("{{ url_for('settings.sync_device', device_id=0) }}".replace('/0', '/' + deviceId), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            })
+            .then(function(resp) { return resp.json(); })
+            .then(function(data) {
+                resultSpan.textContent = data.message;
+                resultSpan.className = 'sync-result small ' + (data.success ? 'text-success' : 'text-danger');
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            })
+            .catch(function() {
+                resultSpan.textContent = 'Sync request failed.';
+                resultSpan.className = 'sync-result small text-danger';
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            });
+        });
+    });
+
+    // === Refresh All Devices button ===
+    var refreshAllBtn = document.getElementById('refresh-all-devices-btn');
+    if (refreshAllBtn) {
+        refreshAllBtn.addEventListener('click', function() {
+            var resultSpan = document.getElementById('refresh-all-result');
+            refreshAllBtn.disabled = true;
+            refreshAllBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Refreshing...';
+            resultSpan.textContent = '';
+
+            fetch("{{ url_for('settings.refresh_all') }}", {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            })
+            .then(function(resp) { return resp.json(); })
+            .then(function(data) {
+                resultSpan.textContent = data.message;
+                resultSpan.className = 'ms-3 small ' + (data.success ? 'text-success' : 'text-danger');
+                refreshAllBtn.disabled = false;
+                refreshAllBtn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>Refresh All';
+                if (data.success) {
+                    setTimeout(function() { location.reload(); }, 2500);
+                }
+            })
+            .catch(function() {
+                resultSpan.textContent = 'Request failed.';
+                resultSpan.className = 'ms-3 small text-danger';
+                refreshAllBtn.disabled = false;
+                refreshAllBtn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>Refresh All';
+            });
+        });
+    }
+
+    // === Add Device Wizard ===
+    var wizStep = 1;
+    var wizDeviceType = '';
+    var wizDeviceId = null;
+    var wizCredentialsValidated = false;
+    var wizDeviceAdded = false;
+
+    var step1 = document.getElementById('wizard-step-1');
+    var step2 = document.getElementById('wizard-step-2');
+    var step3 = document.getElementById('wizard-step-3');
+    var nextBtn = document.getElementById('wiz-next-btn');
+    var backBtn = document.getElementById('wiz-back-btn');
+    var finishBtn = document.getElementById('wiz-finish-btn');
+
+    function wizShowStep(n) {
+        wizStep = n;
+        step1.style.display = n === 1 ? '' : 'none';
+        step2.style.display = n === 2 ? '' : 'none';
+        step3.style.display = n === 3 ? '' : 'none';
+        backBtn.style.display = n > 1 ? '' : 'none';
+        nextBtn.style.display = n < 3 ? '' : 'none';
+        finishBtn.style.display = n === 3 ? '' : 'none';
+
+        for (var i = 1; i <= 3; i++) {
+            var badge = document.getElementById('step-badge-' + i);
+            var label = document.getElementById('step-label-' + i);
+            if (i <= n) {
+                badge.className = 'badge rounded-pill bg-primary wizard-step-badge';
+                label.className = 'small ms-1 me-3 wizard-step-label';
+            } else {
+                badge.className = 'badge rounded-pill bg-secondary wizard-step-badge';
+                label.className = 'small ms-1 me-3 wizard-step-label text-muted';
+            }
+        }
+    }
+
+    // Step 1: Type selection
+    document.querySelectorAll('.wizard-type-card').forEach(function(card) {
+        card.addEventListener('click', function() {
+            document.querySelectorAll('.wizard-type-card').forEach(function(c) {
+                c.style.borderColor = 'transparent';
+            });
+            this.style.borderColor = '#6366f1';
+            wizDeviceType = this.getAttribute('data-type');
+            nextBtn.disabled = false;
+        });
+    });
+
+    nextBtn.addEventListener('click', function() {
+        if (wizStep === 1 && wizDeviceType) {
+            // Show appropriate fields for step 2
+            document.getElementById('wiz-pfsense-fields').style.display = wizDeviceType === 'pfsense' ? '' : 'none';
+            document.getElementById('wiz-linux-fields').style.display = wizDeviceType === 'linux' ? '' : 'none';
+            wizShowStep(2);
+            nextBtn.disabled = false;
+        } else if (wizStep === 2) {
+            // Validate step 2 fields
+            var friendlyName = document.getElementById('wiz-friendly-name').value.trim();
+            var hostname = document.getElementById('wiz-hostname').value.trim();
+            if (!friendlyName || !hostname) {
+                alert('Friendly Name and Hostname are required.');
+                return;
+            }
+            if (wizDeviceType === 'pfsense') {
+                if (!document.getElementById('wiz-pf-username').value.trim() || !document.getElementById('wiz-pf-password').value.trim()) {
+                    alert('Username and Password are required for pfSense.');
+                    return;
+                }
+            } else {
+                if (!document.getElementById('wiz-linux-username').value.trim()) {
+                    alert('SSH Username is required for Linux.');
+                    return;
+                }
+            }
+
+            // Move to step 3 and run credential validation (no device add yet)
+            wizShowStep(3);
+            if (!wizCredentialsValidated) {
+                wizRunTest();
+            }
+        }
+    });
+
+    backBtn.addEventListener('click', function() {
+        if (wizStep === 2) {
+            wizShowStep(1);
+            nextBtn.disabled = !wizDeviceType;
+        } else if (wizStep === 3) {
+            wizShowStep(2);
+            nextBtn.disabled = false;
+        }
+    });
+
+    function wizRunTest() {
+        var spinner = document.getElementById('wiz-test-spinner');
+        var text = document.getElementById('wiz-test-text');
+        var setupOpts = document.getElementById('wiz-setup-options');
+        var floatingOpt = document.getElementById('wiz-floating-rule-option');
+
+        spinner.style.display = '';
+        text.textContent = 'Validating credentials...';
+        text.className = '';
+        setupOpts.style.display = 'none';
+
+        // Build credential payload for validation
+        var payload = {
+            device_type: wizDeviceType,
+            hostname: document.getElementById('wiz-hostname').value.trim()
+        };
+        if (wizDeviceType === 'pfsense') {
+            payload.username = document.getElementById('wiz-pf-username').value.trim();
+            payload.password = document.getElementById('wiz-pf-password').value.trim();
+        } else {
+            payload.username = document.getElementById('wiz-linux-username').value.trim();
+            payload.password = document.getElementById('wiz-linux-password').value || null;
+            payload.ssh_key = document.getElementById('wiz-linux-ssh-key').value || null;
+            payload.port = parseInt(document.getElementById('wiz-linux-port').value) || 22;
+        }
+
+        fetch("{{ url_for('devices.validate_credentials') }}", {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        })
+        .then(function(resp) { return resp.json(); })
+        .then(function(data) {
+            spinner.style.display = 'none';
+            if (data.success) {
+                text.innerHTML = '<i class="bi bi-check-circle-fill text-success me-2"></i>' + data.message;
+                setupOpts.style.display = '';
+                if (wizDeviceType === 'pfsense' && document.getElementById('wiz-pf-block-method').value === 'floating_rule') {
+                    floatingOpt.style.display = '';
+                } else {
+                    floatingOpt.style.display = 'none';
+                }
+            } else {
+                text.innerHTML = '<i class="bi bi-x-circle-fill text-danger me-2"></i>' + data.message;
+                setupOpts.style.display = '';
+            }
+            document.getElementById('wiz-retest-btn').style.display = '';
+            finishBtn.disabled = false;
+            wizCredentialsValidated = true;
+        })
+        .catch(function() {
+            spinner.style.display = 'none';
+            text.innerHTML = '<i class="bi bi-x-circle-fill text-danger me-2"></i>Credential validation request failed.';
+            document.getElementById('wiz-retest-btn').style.display = '';
+            finishBtn.disabled = false;
+            wizCredentialsValidated = true;
+        });
+    }
+
+    document.getElementById('wiz-retest-btn').addEventListener('click', function() {
+        wizCredentialsValidated = false;
+        this.style.display = 'none';
+        finishBtn.disabled = true;
+        wizRunTest();
+    });
+
+    finishBtn.addEventListener('click', function() {
+        // If device already added, just reload
+        if (wizDeviceAdded) {
+            location.reload();
+            return;
+        }
+
+        var createFloating = document.getElementById('wiz-create-floating').checked;
+        var syncBlocklist = document.getElementById('wiz-sync-blocklist').checked;
+        var resultDiv = document.getElementById('wiz-setup-result');
+
+        finishBtn.disabled = true;
+        finishBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Adding device...';
+        resultDiv.innerHTML = '';
+
+        // Build payload to add the device
+        var hostname = document.getElementById('wiz-hostname').value.trim();
+        var payload = {
+            device_type: wizDeviceType,
+            friendly_name: document.getElementById('wiz-friendly-name').value.trim(),
+            hostname: hostname
+        };
+        if (wizDeviceType === 'pfsense') {
+            payload.username = document.getElementById('wiz-pf-username').value.trim();
+            payload.password = document.getElementById('wiz-pf-password').value.trim();
+            payload.block_method = document.getElementById('wiz-pf-block-method').value;
+        } else {
+            payload.port = parseInt(document.getElementById('wiz-linux-port').value) || 22;
+            payload.username = document.getElementById('wiz-linux-username').value.trim();
+            payload.ssh_key = document.getElementById('wiz-linux-ssh-key').value || '';
+            payload.password = document.getElementById('wiz-linux-password').value || '';
+            payload.sudo_password = document.getElementById('wiz-linux-sudo-password').value || '';
+        }
+
+        // Add the device
+        fetch("{{ url_for('devices.add_device_json') }}", {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        })
+        .then(function(resp) { return resp.json(); })
+        .then(function(data) {
+            if (!data.success) {
+                resultDiv.innerHTML = '<div class="text-danger">' + data.message + '</div>';
+                finishBtn.disabled = false;
+                finishBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Finish';
+                return;
+            }
+
+            wizDeviceId = data.device_id;
+            wizDeviceAdded = true;
+
+            // Run setup if options selected
+            if (!createFloating && !syncBlocklist) {
+                resultDiv.innerHTML = '<div class="text-success"><i class="bi bi-check-circle-fill me-2"></i>Device added successfully.</div>';
+                finishBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Done';
+                finishBtn.disabled = false;
+                return;
+            }
+
+            finishBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Setting up...';
+
+            fetch("{{ url_for('settings.setup_device', device_id=0) }}".replace('/0', '/' + wizDeviceId), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    create_floating_rules: createFloating,
+                    sync_blocklist: syncBlocklist
+                })
+            })
+            .then(function(resp) { return resp.json(); })
+            .then(function(setupData) {
+                var html = '<div class="mb-2 text-success"><i class="bi bi-check-circle-fill me-2"></i>Device added.</div>';
+                if (setupData.steps) {
+                    setupData.steps.forEach(function(s) {
+                        var icon = s.success ? '<i class="bi bi-check-circle-fill text-success me-2"></i>' : '<i class="bi bi-x-circle-fill text-danger me-2"></i>';
+                        html += '<div class="mb-1">' + icon + '<strong>' + s.step + ':</strong> ' + s.message + '</div>';
+                    });
+                }
+                html += '<div class="mt-2 text-' + (setupData.success ? 'success' : 'warning') + '">' + setupData.message + '</div>';
+                resultDiv.innerHTML = html;
+                finishBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Done';
+                finishBtn.disabled = false;
+            })
+            .catch(function() {
+                resultDiv.innerHTML = '<div class="text-success mb-2"><i class="bi bi-check-circle-fill me-2"></i>Device added.</div><div class="text-danger">Setup request failed.</div>';
+                finishBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Close';
+                finishBtn.disabled = false;
+            });
+        })
+        .catch(function() {
+            resultDiv.innerHTML = '<div class="text-danger">Failed to add device.</div>';
+            finishBtn.disabled = false;
+            finishBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Finish';
+        });
+    });
+
+    // Reset wizard when modal is closed
+    var wizardModal = document.getElementById('addDeviceWizard');
+    if (wizardModal) {
+        wizardModal.addEventListener('hidden.bs.modal', function() {
+            wizStep = 1;
+            wizDeviceType = '';
+            wizDeviceId = null;
+            wizCredentialsValidated = false;
+            wizDeviceAdded = false;
+            wizShowStep(1);
+            nextBtn.disabled = true;
+            nextBtn.innerHTML = 'Next <i class="bi bi-arrow-right ms-1"></i>';
+            finishBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Finish';
+            finishBtn.disabled = false;
+            document.querySelectorAll('.wizard-type-card').forEach(function(c) {
+                c.style.borderColor = 'transparent';
+            });
+            // Clear form fields
+            document.getElementById('wiz-friendly-name').value = '';
+            document.getElementById('wiz-hostname').value = '';
+            document.getElementById('wiz-pf-username').value = '';
+            document.getElementById('wiz-pf-password').value = '';
+            document.getElementById('wiz-pf-block-method').value = 'floating_rule';
+            document.getElementById('wiz-linux-port').value = '22';
+            document.getElementById('wiz-linux-username').value = '';
+            document.getElementById('wiz-linux-ssh-key').value = '';
+            document.getElementById('wiz-linux-password').value = '';
+            document.getElementById('wiz-linux-sudo-password').value = '';
+            document.getElementById('wiz-setup-result').innerHTML = '';
+            document.getElementById('wiz-test-text').textContent = 'Testing connection...';
+            document.getElementById('wiz-test-spinner').style.display = '';
+            document.getElementById('wiz-retest-btn').style.display = 'none';
+            document.getElementById('wiz-setup-options').style.display = 'none';
+        });
+    }
+
+    // === Block method switch warning ===
+    document.querySelectorAll('.block-method-select').forEach(function(sel) {
+        sel.addEventListener('change', function() {
+            var deviceId = this.getAttribute('data-device-id');
+            var currentMethod = this.getAttribute('data-current-method');
+            var warning = document.getElementById('switch-warning-' + deviceId);
+            var label = document.getElementById('cleanup-label-' + deviceId);
+            if (this.value !== currentMethod) {
+                warning.style.display = '';
+                // Update label text based on direction
+                if (currentMethod === 'floating_rule') {
+                    label.textContent = 'Remove floating rules and alias from pfSense';
+                } else {
+                    label.textContent = 'Remove static null routes from pfSense';
+                }
+            } else {
+                warning.style.display = 'none';
+            }
+        });
+    });
+
+    // === Intercept edit form submit for block method switch ===
+    document.querySelectorAll('.save-device-btn').forEach(function(btn) {
+        btn.closest('form').addEventListener('submit', function(e) {
+            var deviceId = btn.getAttribute('data-device-id');
+            var sel = this.querySelector('.block-method-select');
+            if (!sel) return; // Not a pfSense device
+
+            var currentMethod = sel.getAttribute('data-current-method');
+            var newMethod = sel.value;
+
+            if (currentMethod !== newMethod) {
+                e.preventDefault();
+                var form = this;
+
+                // Read cleanup checkbox value
+                var cleanupCheck = document.getElementById('cleanup-old-' + deviceId);
+                var cleanupOld = cleanupCheck ? cleanupCheck.checked : true;
+
+                // Show switch result inline
+                var resultArea = document.getElementById('switch-warning-' + deviceId);
+
+                btn.disabled = true;
+                btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Switching...';
+
+                fetch("/settings/switch-block-method/" + deviceId, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({new_method: newMethod, cleanup_old: cleanupOld})
+                })
+                .then(function(resp) { return resp.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        form.submit();
+                    } else {
+                        resultArea.innerHTML = '<div class="text-danger small mt-2"><i class="bi bi-x-circle me-1"></i>' + data.message + '</div>';
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Save Changes';
+                    }
+                })
+                .catch(function() {
+                    resultArea.innerHTML = '<div class="text-danger small mt-2"><i class="bi bi-x-circle me-1"></i>Request failed.</div>';
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Save Changes';
+                });
+            }
+        });
+    });
+
+    // === Remove Device with Cleanup ===
+    document.querySelectorAll('.remove-device-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var deviceId = this.getAttribute('data-device-id');
+            var cleanup = document.getElementById('cleanup-device-' + deviceId).checked;
+            var resultDiv = document.getElementById('remove-result-' + deviceId);
+
+            this.disabled = true;
+            this.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Removing...';
+            resultDiv.innerHTML = '';
+
+            fetch("{{ url_for('devices.remove_device', device_id=0) }}".replace('/0', '/' + deviceId), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({cleanup: cleanup})
+            })
+            .then(function(resp) { return resp.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    resultDiv.innerHTML = '<div class="text-success small"><i class="bi bi-check-circle me-1"></i>' + data.message + '</div>';
+                    setTimeout(function() { location.reload(); }, 1500);
+                } else {
+                    resultDiv.innerHTML = '<div class="text-danger small"><i class="bi bi-x-circle me-1"></i>' + data.message + '</div>';
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="bi bi-trash me-1"></i>Remove';
+                }
+            })
+            .catch(function() {
+                resultDiv.innerHTML = '<div class="text-danger small">Request failed.</div>';
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-trash me-1"></i>Remove';
+            });
+        });
+    });
+
+    // === Protected IP Ranges ===
+    function loadProtectedRanges() {
+        fetch('/settings/protected-ranges')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var container = document.getElementById('protected-ranges-list');
+            if (!data.ranges || data.ranges.length === 0) {
+                container.innerHTML = '<span class="text-muted small">No protected ranges defined.</span>';
+                return;
+            }
+            var html = '';
+            data.ranges.forEach(function(range) {
+                html += '<span class="badge bg-secondary bg-opacity-50 me-1 mb-1 py-2 px-3" style="font-family:\'Courier New\',Courier,monospace;font-size:0.85rem">'
+                      + range
+                      + ' <button type="button" class="btn-close btn-close-white ms-2 remove-range-btn" style="font-size:0.6rem" data-range="' + range + '" aria-label="Remove"></button>'
+                      + '</span>';
+            });
+            container.innerHTML = html;
+
+            // Bind remove buttons
+            container.querySelectorAll('.remove-range-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    var range = this.getAttribute('data-range');
+                    fetch('/settings/protected-ranges/remove', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({range: range})
+                    })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        var resultDiv = document.getElementById('protected-range-result');
+                        if (data.success) {
+                            loadProtectedRanges();
+                            resultDiv.innerHTML = '<span class="text-success">' + data.message + '</span>';
+                        } else {
+                            resultDiv.innerHTML = '<span class="text-danger">' + data.message + '</span>';
+                        }
+                        setTimeout(function() { resultDiv.innerHTML = ''; }, 3000);
+                    });
+                });
+            });
+        });
+    }
+    loadProtectedRanges();
+
+    document.getElementById('add-protected-range-btn').addEventListener('click', function() {
+        var input = document.getElementById('new-protected-range');
+        var range = input.value.trim();
+        var resultDiv = document.getElementById('protected-range-result');
+        if (!range) return;
+
+        this.disabled = true;
+        var btn = this;
+
+        fetch('/settings/protected-ranges/add', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({range: range})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.success) {
+                input.value = '';
+                loadProtectedRanges();
+                resultDiv.innerHTML = '<span class="text-success">' + data.message + '</span>';
+            } else {
+                resultDiv.innerHTML = '<span class="text-danger">' + data.message + '</span>';
+            }
+            btn.disabled = false;
+            setTimeout(function() { resultDiv.innerHTML = ''; }, 3000);
+        })
+        .catch(function() {
+            resultDiv.innerHTML = '<span class="text-danger">Request failed.</span>';
+            btn.disabled = false;
+        });
+    });
+
+    // Allow Enter key in the input
+    document.getElementById('new-protected-range').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            document.getElementById('add-protected-range-btn').click();
+        }
+    });
+
+})();
+</script>
+{% endblock %}
