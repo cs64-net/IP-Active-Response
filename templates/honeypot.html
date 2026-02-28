@@ -1,0 +1,1394 @@
+{% extends "base.html" %}
+{% block title %}Honey Pot — IP Active Response{% endblock %}
+
+{% block extra_head %}
+<style>
+    .honeypot-card {
+        border-radius: 1rem;
+        border: 1px solid rgba(255,255,255,0.06);
+        overflow: hidden;
+    }
+    .honeypot-card .card-header {
+        background: rgba(255,255,255,0.03);
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+        padding: 1rem 1.25rem;
+    }
+    .honeypot-card .card-header h5 { font-weight: 600; }
+    .table th {
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        opacity: 0.7;
+    }
+    .table td { vertical-align: middle; }
+    .stat-card {
+        border: none;
+        border-radius: 1rem;
+        overflow: hidden;
+        position: relative;
+    }
+    .stat-card .card-body { position: relative; z-index: 1; }
+    .stat-card .stat-icon {
+        position: absolute;
+        right: 1rem;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 3rem;
+        opacity: 0.15;
+        z-index: 0;
+    }
+    .stat-card .display-6 { font-weight: 700; }
+    .stat-card.card-total { background: linear-gradient(135deg, #6366f1, #818cf8); }
+    .stat-card.card-active { background: linear-gradient(135deg, #10b981, #34d399); }
+    .stat-card.card-alerts { background: linear-gradient(135deg, #f59e0b, #fbbf24); }
+    .stat-card.card-blocked { background: linear-gradient(135deg, #ef4444, #f87171); }
+    .wizard-step { display: none; }
+    .wizard-step.active { display: block; }
+    .wizard-step-indicator { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }
+    .wizard-step-indicator .step-dot {
+        width: 2rem; height: 2rem; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 0.75rem; font-weight: 700;
+        background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.4);
+        transition: all 0.2s;
+    }
+    .wizard-step-indicator .step-dot.active { background: #6366f1; color: #fff; }
+    .wizard-step-indicator .step-dot.done { background: #10b981; color: #fff; }
+    .config-block {
+        background: rgba(0,0,0,0.3);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 0.5rem;
+        padding: 1rem;
+        position: relative;
+        font-family: monospace;
+        font-size: 0.8rem;
+        white-space: pre-wrap;
+        word-break: break-all;
+        max-height: 400px;
+        overflow-y: auto;
+        overflow-x: hidden;
+        width: 100%;
+        box-sizing: border-box;
+    }
+    .config-block pre {
+        white-space: pre-wrap;
+        word-break: break-all;
+        overflow-wrap: break-word;
+        max-width: 100%;
+    }
+    .alert-detail-row td {
+        padding: 0 !important;
+        border-top: none !important;
+    }
+    .alert-detail-panel {
+        background: rgba(0,0,0,0.2);
+        border-top: 1px solid rgba(255,255,255,0.05);
+        padding: 1rem 1.25rem;
+    }
+    .alert-detail-panel .detail-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 0.75rem;
+    }
+    .alert-detail-panel .detail-item {
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 0.5rem;
+        padding: 0.5rem 0.75rem;
+    }
+    .alert-detail-panel .detail-label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        opacity: 0.5;
+        margin-bottom: 0.15rem;
+    }
+    .alert-detail-panel .detail-value {
+        font-size: 0.85rem;
+        word-break: break-all;
+    }
+    .alert-row { cursor: pointer; }
+    .alert-row:hover { background: rgba(255,255,255,0.03); }
+    .alert-row .expand-icon { transition: transform 0.2s; opacity: 0.3; }
+    .alert-row.expanded .expand-icon { transform: rotate(90deg); opacity: 0.7; }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Page Header with Refresh -->
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div></div>
+    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="window.location.reload()">
+        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+    </button>
+</div>
+
+<!-- Summary Statistics Cards -->
+<div class="row g-3 mb-4">
+    <div class="col-6 col-lg-3">
+        <div class="card stat-card card-total text-white">
+            <div class="card-body py-3">
+                <div class="text-white-50 small fw-semibold mb-1">Total Instances</div>
+                <p class="display-6 mb-0">{{ stats.total_instances }}</p>
+            </div>
+            <i class="bi bi-hdd-network stat-icon"></i>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card stat-card card-active text-white">
+            <div class="card-body py-3">
+                <div class="text-white-50 small fw-semibold mb-1">Active Instances</div>
+                <p class="display-6 mb-0">{{ stats.active_instances }}</p>
+            </div>
+            <i class="bi bi-check-circle stat-icon"></i>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card stat-card card-alerts text-white">
+            <div class="card-body py-3">
+                <div class="text-white-50 small fw-semibold mb-1">24h Alerts</div>
+                <p class="display-6 mb-0">{{ stats.alerts_24h }}</p>
+            </div>
+            <i class="bi bi-exclamation-triangle stat-icon"></i>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card stat-card card-blocked text-white">
+            <div class="card-body py-3">
+                <div class="text-white-50 small fw-semibold mb-1">Blocked IPs</div>
+                <p class="display-6 mb-0">{{ stats.blocked_ips }}</p>
+            </div>
+            <i class="bi bi-slash-circle stat-icon"></i>
+        </div>
+    </div>
+</div>
+
+<!-- SIEM Forwarding Status -->
+<div class="d-flex flex-wrap align-items-center gap-2 mb-4">
+    <span class="small fw-semibold text-muted me-1"><i class="bi bi-broadcast me-1"></i>SIEM Forwarding:</span>
+    {% if settings.elastic_enabled %}
+    <span class="badge bg-success bg-opacity-25 text-success-emphasis px-2 py-1">
+        <i class="bi bi-circle-fill me-1" style="font-size:.45rem;vertical-align:middle"></i>Elasticsearch: {{ settings.elastic_host }}
+    </span>
+    {% endif %}
+    {% if settings.syslog_enabled %}
+    <span class="badge bg-success bg-opacity-25 text-success-emphasis px-2 py-1">
+        <i class="bi bi-circle-fill me-1" style="font-size:.45rem;vertical-align:middle"></i>Syslog: {{ settings.syslog_host }}:{{ settings.syslog_port }}
+    </span>
+    {% endif %}
+    {% if not settings.elastic_enabled and not settings.syslog_enabled %}
+    <span class="badge bg-secondary bg-opacity-25 text-muted px-2 py-1">
+        No SIEM forwarding configured
+    </span>
+    {% endif %}
+</div>
+
+<!-- Instance Overview -->
+<div class="card honeypot-card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-hdd-network me-2"></i>Honeypot Instances</h5>
+        <span class="text-muted small">{{ instances | length }} instance{{ 's' if instances | length != 1 else '' }} registered</span>
+    </div>
+    <div class="card-body">
+        <!-- Registration Form -->
+        <form method="POST" action="{{ url_for('honeypot.add_instance') }}" class="mb-3">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-4">
+                    <label for="instance-name" class="form-label small fw-semibold">Instance Name</label>
+                    <input type="text" class="form-control" id="instance-name" name="name" placeholder="e.g. opencanary-dmz-1" required>
+                </div>
+                <div class="col-md-4">
+                    <label for="instance-ip" class="form-label small fw-semibold">IP Address</label>
+                    <input type="text" class="form-control" id="instance-ip" name="ip_address" placeholder="e.g. 10.0.0.50" required>
+                </div>
+                <div class="col-md-4">
+                    <button type="submit" class="btn btn-success w-100">
+                        <i class="bi bi-magic me-1"></i>Honeypot Setup Wizard
+                    </button>
+                </div>
+            </div>
+        </form>
+
+        <!-- Instances Table -->
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>IP Address</th>
+                        <th>Services</th>
+                        <th>Status</th>
+                        <th>Registered</th>
+                        <th>Last Alert</th>
+                        <th>Alerts</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for instance in instances %}
+                    <tr>
+                        <td class="fw-semibold">{{ instance.name }}</td>
+                        <td><code>{{ instance.ip_address }}</code></td>
+                        <td>
+                            {% if instance.services %}
+                                {% for svc in instance.services %}
+                                <span class="badge bg-secondary bg-opacity-50 me-1">{{ svc }}</span>
+                                {% endfor %}
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if instance.status == 'active' %}
+                                <span class="badge bg-success bg-opacity-25"><i class="bi bi-circle-fill text-success me-1" style="font-size:.5rem"></i>Active</span>
+                            {% elif instance.status == 'stale' %}
+                                <span class="badge bg-warning bg-opacity-25" title="Waiting for new IPs to be blocked"><i class="bi bi-circle-fill text-warning me-1" style="font-size:.5rem"></i>Waiting</span>
+                            {% else %}
+                                <span class="badge bg-warning bg-opacity-25"><i class="bi bi-circle-fill text-warning me-1" style="font-size:.5rem"></i>Pending</span>
+                            {% endif %}
+                        </td>
+                        <td class="small text-muted">{{ instance.registered_at or '—' }}</td>
+                        <td class="small text-muted">{{ instance.last_alert_at or '—' }}</td>
+                        <td><span class="badge bg-primary bg-opacity-25">{{ instance.alert_count or 0 }}</span></td>
+                        <td>
+                            <form method="POST" action="{{ url_for('honeypot.delete_instance', instance_id=instance.id) }}" class="d-inline" onsubmit="return confirm('Delete instance {{ instance.name }}? This will also remove associated alerts, block entries, and unblock any IPs that were only blocked by this instance.')">
+                                <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete instance">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="8" class="text-center text-muted py-4">
+                            <i class="bi bi-hdd-network d-block mb-2" style="font-size:2rem;opacity:0.3"></i>
+                            No honeypot instances registered. Add one above to get started.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Alert History -->
+<div class="card honeypot-card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-exclamation-triangle me-2"></i>Alert History</h5>
+        <span class="text-muted small">{{ alerts_total }} alert{{ 's' if alerts_total != 1 else '' }} total</span>
+    </div>
+    <div class="card-body">
+        <!-- Search -->
+        <form method="GET" action="{{ url_for('honeypot.index') }}" class="mb-3">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-4">
+                    <label for="alert-search" class="form-label small fw-semibold">Search Alerts</label>
+                    <input type="text" class="form-control" id="alert-search" name="search" value="{{ search }}" placeholder="Filter by IP, service, or instance name">
+                </div>
+                <div class="col-md-auto">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-search me-1"></i>Search
+                    </button>
+                    {% if search %}
+                    <a href="{{ url_for('honeypot.index') }}" class="btn btn-outline-secondary ms-1">
+                        <i class="bi bi-x-lg me-1"></i>Clear
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </form>
+
+        <!-- Alerts Table -->
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Attacker IP</th>
+                        <th>Service</th>
+                        <th>Instance</th>
+                        <th>Timestamp</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for alert in alerts %}
+                    <tr class="alert-row" onclick="toggleAlertDetail('alert-detail-{{ loop.index }}', this)">
+                        <td><code>{{ alert.attacker_ip }}</code></td>
+                        <td>
+                            {% set svc = alert.service_name %}
+                            {% if svc in ('ssh',) %}
+                                <span class="badge bg-danger bg-opacity-50">{{ svc }}</span>
+                            {% elif svc in ('ftp', 'telnet') %}
+                                <span class="badge bg-warning bg-opacity-50 text-dark">{{ svc }}</span>
+                            {% elif svc in ('http', 'httpproxy') %}
+                                <span class="badge bg-info bg-opacity-50">{{ svc }}</span>
+                            {% elif svc in ('portscan',) %}
+                                <span class="badge bg-danger bg-opacity-75">{{ svc }}</span>
+                            {% elif svc in ('smb', 'rdp', 'vnc') %}
+                                <span class="badge bg-primary bg-opacity-50">{{ svc }}</span>
+                            {% elif svc in ('mysql', 'mssql', 'redis') %}
+                                <span class="badge bg-success bg-opacity-50">{{ svc }}</span>
+                            {% elif svc == 'unknown' %}
+                                <span class="badge bg-secondary bg-opacity-25">{{ svc }}</span>
+                            {% else %}
+                                <span class="badge bg-secondary bg-opacity-50">{{ svc }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ alert.instance_name or '—' }}</td>
+                        <td class="small text-muted">{{ alert.received_at or alert.alert_timestamp or '—' }}</td>
+                        <td class="d-flex align-items-center justify-content-between">
+                            {% if alert.status == 'blocked' %}
+                                <span class="badge bg-danger bg-opacity-25">Blocked</span>
+                            {% elif alert.status == 'updated' %}
+                                <span class="badge bg-info bg-opacity-25">Updated</span>
+                            {% elif alert.status == 'skipped_protected' %}
+                                <span class="badge bg-warning bg-opacity-25">Skipped (Protected)</span>
+                            {% elif alert.status == 'skipped_invalid' %}
+                                <span class="badge bg-secondary bg-opacity-25">Skipped (Invalid)</span>
+                            {% else %}
+                                <span class="badge bg-secondary bg-opacity-25">{{ alert.status }}</span>
+                            {% endif %}
+                            <i class="bi bi-chevron-right expand-icon ms-2"></i>
+                        </td>
+                    </tr>
+                    <tr class="alert-detail-row" id="alert-detail-{{ loop.index }}" style="display:none;">
+                        <td colspan="5">
+                            <div class="alert-detail-panel" data-raw='{{ alert.raw_payload | default("{}") | e }}'>
+                                <div class="detail-grid" id="alert-grid-{{ loop.index }}"></div>
+                            </div>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-4">
+                            <i class="bi bi-exclamation-triangle d-block mb-2" style="font-size:2rem;opacity:0.3"></i>
+                            No alerts recorded{% if search %} matching "{{ search }}"{% endif %}.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        {% if alerts_pages > 1 %}
+        <nav aria-label="Alert history pagination" class="mt-3">
+            <ul class="pagination pagination-sm justify-content-center mb-0">
+                <li class="page-item {% if alerts_page <= 1 %}disabled{% endif %}">
+                    <a class="page-link" href="{{ url_for('honeypot.index', page=alerts_page - 1, search=search) }}">
+                        <i class="bi bi-chevron-left"></i>
+                    </a>
+                </li>
+                {% for p in range(1, alerts_pages + 1) %}
+                    {% if p == alerts_page %}
+                    <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+                    {% elif p <= 3 or p > alerts_pages - 2 or (p >= alerts_page - 1 and p <= alerts_page + 1) %}
+                    <li class="page-item">
+                        <a class="page-link" href="{{ url_for('honeypot.index', page=p, search=search) }}">{{ p }}</a>
+                    </li>
+                    {% elif p == 4 or p == alerts_pages - 2 %}
+                    <li class="page-item disabled"><span class="page-link">…</span></li>
+                    {% endif %}
+                {% endfor %}
+                <li class="page-item {% if alerts_page >= alerts_pages %}disabled{% endif %}">
+                    <a class="page-link" href="{{ url_for('honeypot.index', page=alerts_page + 1, search=search) }}">
+                        <i class="bi bi-chevron-right"></i>
+                    </a>
+                </li>
+            </ul>
+        </nav>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Blocked IPs -->
+<div class="card honeypot-card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-slash-circle me-2"></i>Blocked IPs</h5>
+        <span class="text-muted small">{{ blocked_ips | length }} IP{{ 's' if blocked_ips | length != 1 else '' }} blocked</span>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>IP Address</th>
+                        <th>Instance</th>
+                        <th>Service</th>
+                        <th>Blocked At</th>
+                        <th>Threat Indicators</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for entry in blocked_ips %}
+                    <tr>
+                        <td><code>{{ entry.ip_address }}</code></td>
+                        <td>{{ entry.instance_name or '—' }}</td>
+                        <td><span class="badge bg-secondary bg-opacity-50">{{ entry.service_name or '—' }}</span></td>
+                        <td class="small text-muted">{{ entry.blocked_at or '—' }}</td>
+                        <td>
+                            {% if entry.lateral_movement %}
+                                <span class="badge bg-warning bg-opacity-25 me-1"><i class="bi bi-arrow-left-right me-1"></i>Lateral Movement</span>
+                            {% endif %}
+                            {% if entry.port_scanner %}
+                                <span class="badge bg-info bg-opacity-25"><i class="bi bi-broadcast me-1"></i>Port Scanner</span>
+                            {% endif %}
+                            {% if not entry.lateral_movement and not entry.port_scanner %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <form method="POST" action="{{ url_for('honeypot.unblock_ip', ip_address=entry.ip_address) }}" class="d-inline" onsubmit="return confirm('Unblock {{ entry.ip_address }}? This will remove it from the blocklist.')">
+                                <button type="submit" class="btn btn-sm btn-outline-warning" title="Unblock IP">
+                                    <i class="bi bi-unlock me-1"></i>Unblock
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-4">
+                            <i class="bi bi-slash-circle d-block mb-2" style="font-size:2rem;opacity:0.3"></i>
+                            No IPs blocked by honeypot detections.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Settings -->
+<div class="card honeypot-card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-gear me-2"></i>Honeypot Settings</h5>
+    </div>
+    <div class="card-body">
+        <form method="POST" action="{{ url_for('honeypot.update_settings') }}" id="honeypot-settings-form">
+            <div class="row g-3 align-items-end mb-4">
+                <div class="col-md-4">
+                    <label for="honeypot-timeout" class="form-label small fw-semibold">
+                        Block Timeout (seconds)
+                        <span class="ms-1 text-muted" data-bs-toggle="tooltip" data-bs-placement="top"
+                              title="How long honeypot-triggered blocks last. Set to 0 for permanent. Min 300s (5 min), max 2592000s (30 days)."
+                              style="cursor:help;">&#9432;</span>
+                    </label>
+                    <input type="number" class="form-control" id="honeypot-timeout" name="honeypot_timeout"
+                           value="{{ settings.honeypot_timeout }}" min="0" max="2592000">
+                </div>
+                <div class="col-md-4">
+                    <label for="honeypot-staleness" class="form-label small fw-semibold">
+                        Staleness Threshold (seconds)
+                        <span class="ms-1 text-muted" data-bs-toggle="tooltip" data-bs-placement="top"
+                              title="Seconds since last alert before an instance is marked as stale. Default 3600s (1 hour)."
+                              style="cursor:help;">&#9432;</span>
+                    </label>
+                    <input type="number" class="form-control" id="honeypot-staleness" name="honeypot_staleness_threshold"
+                           value="{{ settings.honeypot_staleness_threshold }}" min="1">
+                </div>
+            </div>
+
+            <!-- Elasticsearch Forwarding -->
+            <hr class="my-3" style="border-color:rgba(255,255,255,0.1);">
+            <h6 class="fw-bold mb-3"><i class="bi bi-database me-2 text-info"></i>Elasticsearch Forwarding</h6>
+            <div class="row g-3 mb-3">
+                <div class="col-12">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="elastic-enabled" name="elastic_enabled" value="1"
+                               {% if settings.elastic_enabled %}checked{% endif %}>
+                        <label class="form-check-label small fw-semibold" for="elastic-enabled">Enable Elasticsearch forwarding</label>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <label for="elastic-host" class="form-label small fw-semibold">Host URL</label>
+                    <input type="text" class="form-control" id="elastic-host" name="elastic_host"
+                           value="{{ settings.elastic_host or '' }}" placeholder="https://elasticsearch:9200">
+                </div>
+                <div class="col-md-6">
+                    <label for="elastic-index" class="form-label small fw-semibold">Index Name</label>
+                    <input type="text" class="form-control" id="elastic-index" name="elastic_index"
+                           value="{{ settings.elastic_index or 'honeypot-alerts' }}" placeholder="honeypot-alerts">
+                </div>
+                <div class="col-md-6">
+                    <label for="elastic-api-key" class="form-label small fw-semibold">API Key</label>
+                    <input type="password" class="form-control" id="elastic-api-key" name="elastic_api_key"
+                           value="{{ settings.elastic_api_key or '' }}" placeholder="Optional API key">
+                </div>
+                <div class="col-md-6 d-flex align-items-end">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="elastic-tls-verify" name="elastic_tls_verify" value="1"
+                               {% if settings.elastic_tls_verify %}checked{% endif %}>
+                        <label class="form-check-label small fw-semibold" for="elastic-tls-verify">Verify TLS certificates</label>
+                    </div>
+                </div>
+                <div class="col-12">
+                    <button type="button" class="btn btn-sm btn-outline-info" id="test-elasticsearch-btn" onclick="testElasticsearch()">
+                        <i class="bi bi-plug me-1"></i>Test Connection
+                    </button>
+                    <span class="ms-2 small" id="test-elasticsearch-result"></span>
+                </div>
+            </div>
+
+            <!-- Syslog Forwarding -->
+            <hr class="my-3" style="border-color:rgba(255,255,255,0.1);">
+            <h6 class="fw-bold mb-3"><i class="bi bi-journal-text me-2 text-warning"></i>Syslog Forwarding</h6>
+            <div class="row g-3 mb-3">
+                <div class="col-12">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="syslog-enabled" name="syslog_enabled" value="1"
+                               {% if settings.syslog_enabled %}checked{% endif %}>
+                        <label class="form-check-label small fw-semibold" for="syslog-enabled">Enable Syslog forwarding</label>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <label for="syslog-host" class="form-label small fw-semibold">Server Host</label>
+                    <input type="text" class="form-control" id="syslog-host" name="syslog_host"
+                           value="{{ settings.syslog_host or '' }}" placeholder="syslog.example.com">
+                </div>
+                <div class="col-md-2">
+                    <label for="syslog-port" class="form-label small fw-semibold">Port</label>
+                    <input type="number" class="form-control" id="syslog-port" name="syslog_port"
+                           value="{{ settings.syslog_port or 514 }}" min="1" max="65535">
+                </div>
+                <div class="col-md-3">
+                    <label for="syslog-protocol" class="form-label small fw-semibold">Protocol</label>
+                    <select class="form-select" id="syslog-protocol" name="syslog_protocol">
+                        <option value="udp" {% if settings.syslog_protocol == 'udp' %}selected{% endif %}>UDP</option>
+                        <option value="tcp" {% if settings.syslog_protocol == 'tcp' %}selected{% endif %}>TCP</option>
+                        <option value="tcp+tls" {% if settings.syslog_protocol == 'tcp+tls' %}selected{% endif %}>TCP+TLS</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="syslog-facility" class="form-label small fw-semibold">Facility</label>
+                    <select class="form-select" id="syslog-facility" name="syslog_facility">
+                        {% set facilities = ['kern', 'user', 'mail', 'daemon', 'auth', 'syslog', 'lpr', 'news', 'uucp', 'cron', 'authpriv', 'ftp', 'local0', 'local1', 'local2', 'local3', 'local4', 'local5', 'local6', 'local7'] %}
+                        {% for fac in facilities %}
+                        <option value="{{ fac }}" {% if settings.syslog_facility == fac %}selected{% endif %}>{{ fac }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-12">
+                    <button type="button" class="btn btn-sm btn-outline-warning" id="test-syslog-btn" onclick="testSyslog()">
+                        <i class="bi bi-plug me-1"></i>Test Connection
+                    </button>
+                    <span class="ms-2 small" id="test-syslog-result"></span>
+                </div>
+            </div>
+
+            <hr class="my-3" style="border-color:rgba(255,255,255,0.1);">
+            <div class="row">
+                <div class="col-md-4">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-lg me-1"></i>Save Settings
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Deployment Guidance -->
+<div class="card honeypot-card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-rocket-takeoff me-2"></i>Deployment Guidance</h5>
+    </div>
+    <div class="card-body">
+        <div class="mb-3">
+            <p class="small fw-semibold mb-2"><i class="bi bi-archive me-1"></i>Offline Bundle Status</p>
+            {% if offline_bundle_info is defined and offline_bundle_info and offline_bundle_info.available %}
+            <div class="d-flex align-items-center gap-2">
+                <span class="badge bg-success bg-opacity-25"><i class="bi bi-check-circle-fill text-success me-1"></i>Available</span>
+                <span class="small text-muted">
+                    {{ "%.1f"|format(offline_bundle_info.size_bytes / 1048576) }} MB
+                    {% if offline_bundle_info.last_built %}
+                    &middot; Built {{ offline_bundle_info.last_built[:16]|replace('T', ' ') }}
+                    {% endif %}
+                </span>
+                <button type="button" class="btn btn-sm btn-outline-info ms-auto" onclick="buildOfflineBundle(this)" title="Rebuild the offline bundle">
+                    <i class="bi bi-arrow-clockwise me-1"></i>Rebuild
+                </button>
+            </div>
+            {% else %}
+            <div>
+                <span class="badge bg-warning bg-opacity-25"><i class="bi bi-exclamation-circle-fill text-warning me-1"></i>Not built</span>
+                <div class="d-flex align-items-center gap-2 mt-2">
+                    <p class="small text-muted mb-0">No offline bundle available.</p>
+                    <button type="button" class="btn btn-sm btn-outline-success ms-auto" onclick="buildOfflineBundle(this)">
+                        <i class="bi bi-hammer me-1"></i>Build Bundle
+                    </button>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Setup Wizard Modal -->
+<div class="modal fade" id="setupWizardModal" tabindex="-1" aria-labelledby="setupWizardLabel" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-xl modal-dialog-centered">
+        <div class="modal-content" style="background:#1a1d23;border:1px solid rgba(255,255,255,0.1);">
+            <div class="modal-header border-0 pb-0">
+                <h5 class="modal-title" id="setupWizardLabel"><i class="bi bi-magic me-2"></i>Setup Wizard</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <!-- Step indicators -->
+                <div class="wizard-step-indicator" id="wizardSteps">
+                    <div class="step-dot active" data-step="1">1</div>
+                    <div class="step-dot" data-step="2">2</div>
+                </div>
+
+                <!-- Hidden elements for config generation (not displayed) -->
+                <pre id="wizardConfig" class="d-none"></pre>
+                <span id="wizardToken" class="d-none"></span>
+
+                <!-- Step 1: Services -->
+                <div class="wizard-step active" id="wizardStep1">
+                    <h6 class="fw-bold mb-3"><i class="bi bi-hdd-rack me-2 text-primary"></i>Select Services</h6>
+                    <div class="alert alert-secondary small py-2 mb-3" style="border-left:3px solid #6366f1;">
+                        <i class="bi bi-info-circle me-1 text-primary"></i>
+                        This wizard deploys <a href="https://github.com/thinkst/opencanary" target="_blank" class="fw-semibold">OpenCanary</a>, an open-source honeypot daemon.
+                        It runs fake network services (SSH, FTP, HTTP, etc.) on a device in your network. When an attacker connects to one of these decoy services,
+                        OpenCanary sends an alert back to this dashboard, and the attacker's IP is automatically blocked across your firewall.
+                    </div>
+                    <p class="small text-muted mb-3">Choose which honeypot services to enable. Each service listens on a port and mimics a real server. You can customise the port for each.</p>
+                    <div class="alert alert-warning small py-2 mb-3">
+                        <i class="bi bi-exclamation-triangle me-1"></i>Make sure the ports you choose don't conflict with services already running on the target machine. For example, if SSH is already running on port 22, don't enable the SSH honeypot on port 22 — use a different port or disable it.
+                    </div>
+                    <div class="row g-2" id="serviceCheckboxes">
+                    </div>
+                </div>
+
+                <!-- Step 2: Deploy -->
+                <div class="wizard-step" id="wizardStep2">
+                    <h6 class="fw-bold mb-3"><i class="bi bi-rocket-takeoff me-2 text-success"></i>Deploy Your Honeypot</h6>
+                    <p class="small text-muted mb-3">Choose a deployment method. Click a tab to see step-by-step instructions.</p>
+
+                    <!-- Deployment method tabs -->
+                    <ul class="nav nav-pills nav-fill mb-3" id="deployTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="tab-docker" data-bs-toggle="pill" data-bs-target="#deploy-docker" type="button" role="tab" style="font-size:0.85rem;">
+                                <i class="bi bi-box me-1"></i>Docker <span class="badge bg-success bg-opacity-50 ms-1" style="font-size:0.65rem;">Recommended</span>
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="tab-manual" data-bs-toggle="pill" data-bs-target="#deploy-manual" type="button" role="tab" style="font-size:0.85rem;">
+                                <i class="bi bi-terminal me-1"></i>Manual (pip)
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="tab-offline" data-bs-toggle="pill" data-bs-target="#deploy-offline" type="button" role="tab" style="font-size:0.85rem;">
+                                <i class="bi bi-wifi-off me-1"></i>Offline <span class="badge bg-warning bg-opacity-50 ms-1 text-dark" style="font-size:0.65rem;">Alpha</span>
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="tab-configkey" data-bs-toggle="pill" data-bs-target="#deploy-configkey" type="button" role="tab" style="font-size:0.85rem;">
+                                <i class="bi bi-key me-1"></i>Config &amp; API Key
+                            </button>
+                        </li>
+                    </ul>
+
+                    <div class="tab-content" id="deployTabContent">
+
+                        <!-- ===== DOCKER TAB ===== -->
+                        <div class="tab-pane fade show active" id="deploy-docker" role="tabpanel">
+                            <div class="alert alert-secondary small py-2 mb-3">
+                                <i class="bi bi-info-circle me-1"></i><strong>Prerequisite:</strong> Docker &amp; Docker Compose must be installed on the target machine.
+                                <a href="https://docs.docker.com/engine/install/" target="_blank" class="ms-1">Install Docker &rarr;</a>
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-1-circle me-1 text-primary"></i>Create a project directory</p>
+                                <div class="config-block" style="font-size:0.8rem;">
+                                    <pre class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;">mkdir -p ~/opencanary &amp;&amp; cd ~/opencanary</pre>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-2-circle me-1 text-primary"></i>Create <code>docker-compose.yml</code></p>
+                                <p class="small text-muted mb-1">Create a file called <code>docker-compose.yml</code> in the project directory and paste this:</p>
+                                <div class="config-block" id="dockerBlock" style="font-size:0.8rem;">
+                                    <pre id="wizardDocker" class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;"></pre>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-light mt-2" onclick="copyToClipboard('wizardDocker', this)">
+                                    <i class="bi bi-clipboard me-1"></i>Copy Docker Compose
+                                </button>
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-3-circle me-1 text-primary"></i>Create <code>opencanary.conf</code></p>
+                                <p class="small text-muted mb-1">Create a file called <code>opencanary.conf</code> in the same directory and paste this config:</p>
+                                <div class="config-block" style="font-size:0.8rem;max-height:150px;">
+                                    <pre id="wizardConfigDocker" class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;"></pre>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-light mt-2" onclick="copyToClipboard('wizardConfigDocker', this)">
+                                    <i class="bi bi-clipboard me-1"></i>Copy Config
+                                </button>
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-4-circle me-1 text-primary"></i>Start the honeypot</p>
+                                <p class="small text-muted mb-1">From the project directory, run:</p>
+                                <div class="config-block" style="font-size:0.8rem;">
+                                    <pre class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;">docker compose up -d</pre>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-5-circle me-1 text-primary"></i>Verify it's running</p>
+                                <div class="config-block" style="font-size:0.8rem;">
+                                    <pre class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;">docker compose logs -f</pre>
+                                </div>
+                                <p class="small text-muted mt-1 mb-0">You should see OpenCanary starting up and listening on the ports you selected. Press <kbd>Ctrl+C</kbd> to exit the log view.</p>
+                            </div>
+
+                            <div class="alert alert-info small mb-0 py-2" role="alert">
+                                <i class="bi bi-check-circle me-1"></i>
+                                Once running, OpenCanary sends a boot event that automatically marks the instance as <span class="badge bg-success bg-opacity-25">Active</span> on this dashboard.
+                                A built-in heartbeat pings every 5 minutes to keep it active.
+                            </div>
+                        </div>
+
+                        <!-- ===== MANUAL TAB ===== -->
+                        <div class="tab-pane fade" id="deploy-manual" role="tabpanel">
+                            <div class="alert alert-secondary small py-2 mb-3">
+                                <i class="bi bi-info-circle me-1"></i><strong>Prerequisite:</strong> Python 3.8+ and pip must be installed on the target machine.
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-1-circle me-1 text-primary"></i>Install OpenCanary via pip</p>
+                                <div class="config-block" style="font-size:0.8rem;">
+                                    <pre class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;">pip install opencanary</pre>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-2-circle me-1 text-primary"></i>Create the config directory</p>
+                                <div class="config-block" style="font-size:0.8rem;">
+                                    <pre class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;">sudo mkdir -p /etc/opencanaryd</pre>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-3-circle me-1 text-primary"></i>Save the config file</p>
+                                <p class="small text-muted mb-1">Copy the config below and save it to <code>/etc/opencanaryd/opencanary.conf</code>:</p>
+                                <div class="config-block" style="font-size:0.8rem;max-height:150px;">
+                                    <pre id="wizardConfigManual" class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;"></pre>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-light mt-2" onclick="copyToClipboard('wizardConfigManual', this)">
+                                    <i class="bi bi-clipboard me-1"></i>Copy Config
+                                </button>
+                                <p class="small text-muted mt-1 mb-0">You can paste it with: <code>sudo nano /etc/opencanaryd/opencanary.conf</code></p>
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-4-circle me-1 text-primary"></i>Start OpenCanary</p>
+                                <div class="config-block" style="font-size:0.8rem;">
+                                    <pre class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;">opencanaryd --start</pre>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-5-circle me-1 text-primary"></i>Verify it's running</p>
+                                <div class="config-block" style="font-size:0.8rem;">
+                                    <pre class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;">opencanaryd --status</pre>
+                                </div>
+                            </div>
+
+                            <div class="alert alert-info small mb-0 py-2" role="alert">
+                                <i class="bi bi-check-circle me-1"></i>
+                                Once running, OpenCanary sends a boot event that automatically marks the instance as <span class="badge bg-success bg-opacity-25">Active</span> on this dashboard.
+                                A built-in heartbeat pings every 5 minutes to keep it active.
+                            </div>
+                        </div>
+
+                        <!-- ===== OFFLINE TAB ===== -->
+                        <div class="tab-pane fade" id="deploy-offline" role="tabpanel">
+                            <div class="alert alert-warning small py-2 mb-3">
+                                <i class="bi bi-exclamation-triangle me-1"></i><strong>Alpha</strong> — Tested on Ubuntu 24.04 LTS. For air-gapped devices with no internet access.
+                            </div>
+
+                            <div class="mb-3" id="offlineBundleStatus">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-1-circle me-1 text-primary"></i>Build the offline bundle</p>
+                                <div id="offlineBundleReady" style="display:none;">
+                                    <div class="d-flex align-items-center gap-2">
+                                        <span class="badge bg-success bg-opacity-25"><i class="bi bi-check-circle-fill text-success me-1"></i>Bundle ready</span>
+                                        <span class="small text-muted">You're good to go.</span>
+                                    </div>
+                                </div>
+                                <div id="offlineBundleNotReady" style="display:none;">
+                                    <div class="alert alert-danger small py-2 mb-2">
+                                        <i class="bi bi-x-circle me-1"></i>No offline bundle has been built yet. You need to build it before you can deploy.
+                                    </div>
+                                    <button type="button" class="btn btn-sm btn-outline-success" onclick="buildOfflineBundle(this)">
+                                        <i class="bi bi-hammer me-1"></i>Build Bundle Now
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-2-circle me-1 text-primary"></i>Copy the install command</p>
+                                <p class="small text-muted mb-1">Run this as <strong>root</strong> on the target device. It downloads the bundle, config, and runs the installer. The target device must be able to reach this server.</p>
+                                <div class="config-block" style="font-size:0.8rem;">
+                                    <pre id="wizardOfflineCmd" class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;white-space:pre-wrap;word-break:break-all;"></pre>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-light mt-2" onclick="copyToClipboard('wizardOfflineCmd', this)">
+                                    <i class="bi bi-clipboard me-1"></i>Copy Command
+                                </button>
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-3-circle me-1 text-primary"></i>When prompted, press <kbd>p</kbd> to paste a new config</p>
+                                <p class="small text-muted mb-1">The installer will show the downloaded config and ask what to do. Press <kbd>p</kbd> then Enter to paste a replacement config.</p>
+                                <div class="config-block" style="font-size:0.8rem;padding:0.75rem;">
+                                    <pre class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;">  [Enter]  Keep this config and start the service
+  [e]      Open in a text editor (nano or vi)
+  [p]      Paste a replacement config  ← choose this</pre>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-4-circle me-1 text-primary"></i>Copy and paste this config (includes EOF)</p>
+                                <p class="small text-muted mb-1">Copy the block below and paste it into the terminal. The <code>EOF</code> at the end tells the installer you're done.</p>
+                                <div class="config-block" style="font-size:0.8rem;max-height:200px;">
+                                    <pre id="wizardConfigOffline" class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;"></pre>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-light mt-2" onclick="copyToClipboard('wizardConfigOffline', this)">
+                                    <i class="bi bi-clipboard me-1"></i>Copy Config + EOF
+                                </button>
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-5-circle me-1 text-primary"></i>That's it</p>
+                                <p class="small text-muted mb-0">The installer handles everything automatically: creates a Python virtual environment, installs all dependencies from the bundle, writes the config, and starts the systemd service.</p>
+                            </div>
+
+                            <div class="alert alert-info small mb-0 py-2" role="alert">
+                                <i class="bi bi-check-circle me-1"></i>
+                                Once running, OpenCanary sends a boot event that automatically marks the instance as <span class="badge bg-success bg-opacity-25">Active</span> on this dashboard.
+                                A built-in heartbeat pings every 5 minutes to keep it active. Check status with <code>systemctl status opencanary</code>.
+                            </div>
+                        </div>
+
+                        <!-- ===== CONFIG & API KEY TAB ===== -->
+                        <div class="tab-pane fade" id="deploy-configkey" role="tabpanel">
+                            <div class="alert alert-secondary small py-2 mb-3">
+                                <i class="bi bi-info-circle me-1"></i>For existing deployments. Use this tab to grab the API token and config for an already-running honeypot.
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-key me-1 text-warning"></i>API Token</p>
+                                <p class="small text-muted mb-1">This token authenticates your honeypot with this dashboard.</p>
+                                <div class="config-block" style="font-size:0.8rem;">
+                                    <pre id="wizardTokenTab" class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;"></pre>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-light mt-2" onclick="copyToClipboard('wizardTokenTab', this)">
+                                    <i class="bi bi-clipboard me-1"></i>Copy Token
+                                </button>
+                            </div>
+
+                            <div class="mb-3">
+                                <p class="small fw-semibold mb-1"><i class="bi bi-file-earmark-code me-1 text-info"></i>Full Configuration</p>
+                                <p class="small text-muted mb-1">The complete <code>opencanary.conf</code> based on the services you selected:</p>
+                                <div class="config-block" style="font-size:0.8rem;max-height:300px;">
+                                    <pre id="wizardConfigTab" class="mb-0" style="color:#e2e8f0;background:transparent;border:none;padding:0;margin:0;font-size:0.8rem;"></pre>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-light mt-2" onclick="copyToClipboard('wizardConfigTab', this)">
+                                    <i class="bi bi-clipboard me-1"></i>Copy Config
+                                </button>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer border-0 pt-0">
+                <button type="button" class="btn btn-outline-secondary" id="wizardPrev" onclick="wizardNav(-1)" style="display:none;">
+                    <i class="bi bi-chevron-left me-1"></i>Back
+                </button>
+                <button type="button" class="btn btn-primary" id="wizardNext" onclick="wizardNav(1)">
+                    Next<i class="bi bi-chevron-right ms-1"></i>
+                </button>
+                <button type="button" class="btn btn-success" id="wizardDone" data-bs-dismiss="modal" style="display:none;">
+                    <i class="bi bi-check-lg me-1"></i>Done
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function() {
+    // Initialize Bootstrap tooltips
+    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.forEach(function(el) { new bootstrap.Tooltip(el); });
+})();
+
+var currentWizardStep = 1;
+var totalWizardSteps = 2;
+var wizardState = {};
+
+// All core OpenCanary protocols
+var svcDefaults = {
+    'ssh':       {label: 'SSH',        defaultPort: 22,   extra: {'ssh.version': 'SSH-2.0-OpenSSH_5.1p1 Debian-4'}, defaultOn: true},
+    'ftp':       {label: 'FTP',        defaultPort: 21,   extra: {'ftp.banner': 'FTP server ready'}, defaultOn: true},
+    'http':      {label: 'HTTP',       defaultPort: 80,   extra: {'http.banner': 'Apache/2.2.22 (Ubuntu)', 'http.skin': 'nasLogin'}, defaultOn: true},
+    'telnet':    {label: 'Telnet',     defaultPort: 23,   extra: {}, defaultOn: false},
+    'mysql':     {label: 'MySQL',      defaultPort: 3306, extra: {}, defaultOn: false},
+    'mssql':     {label: 'MSSQL',      defaultPort: 1433, extra: {}, defaultOn: false},
+    'vnc':       {label: 'VNC',        defaultPort: 5900, extra: {}, defaultOn: false},
+    'rdp':       {label: 'RDP',        defaultPort: 3389, extra: {}, defaultOn: false},
+    'redis':     {label: 'Redis',      defaultPort: 6379, extra: {}, defaultOn: false},
+    'smb':       {label: 'SMB',        defaultPort: 445,  extra: {}, defaultOn: false},
+    'snmp':      {label: 'SNMP',       defaultPort: 161,  extra: {}, defaultOn: false},
+    'tftp':      {label: 'TFTP',       defaultPort: 69,   extra: {}, defaultOn: false},
+    'git':       {label: 'Git',        defaultPort: 9418, extra: {}, defaultOn: false},
+    'httpproxy': {label: 'HTTP Proxy', defaultPort: 8080, extra: {}, defaultOn: false},
+    'sip':       {label: 'SIP',        defaultPort: 5060, extra: {}, defaultOn: false}
+};
+
+function initSetupWizard(data) {
+    wizardState = data;
+
+    // Populate token
+    document.getElementById('wizardToken').textContent = data.token;
+
+    // Build service checkboxes
+    var container = document.getElementById('serviceCheckboxes');
+    var html = '';
+    for (var key in svcDefaults) {
+        var svc = svcDefaults[key];
+        var checked = svc.defaultOn ? ' checked' : '';
+        html += '<div class="col-6 col-md-4 col-lg-3">' +
+            '<div class="card" style="border:1px solid rgba(255,255,255,0.1);border-radius:0.5rem;background:rgba(255,255,255,0.03)">' +
+            '<div class="card-body py-2 px-3">' +
+            '<div class="form-check mb-1">' +
+            '<input class="form-check-input svc-check" type="checkbox" id="svc-' + key + '" value="' + key + '"' + checked + '>' +
+            '<label class="form-check-label small fw-semibold" for="svc-' + key + '">' + svc.label + '</label>' +
+            '</div>' +
+            '<div class="d-flex align-items-center gap-1">' +
+            '<label class="small text-muted mb-0" for="port-' + key + '">Port:</label>' +
+            '<input type="number" class="form-control form-control-sm svc-port" id="port-' + key + '" data-svc="' + key + '" value="' + svc.defaultPort + '" style="width:5rem;font-size:0.8rem">' +
+            '</div>' +
+            '</div></div></div>';
+    }
+    container.innerHTML = html;
+
+    // Generate initial config
+    regenerateConfig();
+
+    // Docker compose
+    var dockerCompose = 'version: "3"\nservices:\n  opencanary:\n    image: thinkst/opencanary\n    restart: unless-stopped\n    network_mode: host\n    volumes:\n      - ./opencanary.conf:/etc/opencanaryd/opencanary.conf\n    environment:\n      - TZ=UTC';
+    document.getElementById('wizardDocker').textContent = dockerCompose;
+
+    // Offline install command — single line so copy-paste works reliably
+    var offlineCmd = "mkdir -p /tmp/oc-install && curl -sfL -H 'X-Honeypot-Token: " + data.token + "' " + data.soc_url + "/api/v1/honeypot/offline/bundle | tar xz -C /tmp/oc-install && curl -sf -H 'X-Honeypot-Token: " + data.token + "' " + data.soc_url + "/api/v1/honeypot/offline/config -o /tmp/oc-install/opencanary.conf && cd /tmp/oc-install && bash install.sh --config opencanary.conf";
+    document.getElementById('wizardOfflineCmd').textContent = offlineCmd;
+
+    // Config & API Key tab
+    var tokenTab = document.getElementById('wizardTokenTab');
+    if (tokenTab) tokenTab.textContent = data.token;
+
+    // Offline bundle status
+    if (data.bundle_available) {
+        document.getElementById('offlineBundleReady').style.display = '';
+        document.getElementById('offlineBundleNotReady').style.display = 'none';
+    } else {
+        document.getElementById('offlineBundleReady').style.display = 'none';
+        document.getElementById('offlineBundleNotReady').style.display = '';
+    }
+
+    // Show the modal
+    var modal = new bootstrap.Modal(document.getElementById('setupWizardModal'));
+    modal.show();
+}
+
+function regenerateConfig() {
+    var config = {
+        'device.node_id': wizardState.name,
+        'server.ip': '0.0.0.0',
+        'ip.ignorelist': [],
+        'logtype.ignorelist': [],
+        'logger': {
+            'class': 'PyLogger',
+            'kwargs': {
+                'formatters': {
+                    'plain': { 'format': '%(message)s' }
+                },
+                'handlers': {
+                    'webhook': {
+                        'class': 'opencanary.logger.WebhookHandler',
+                        'url': wizardState.soc_url + '/api/v1/honeypot/alert',
+                        'method': 'POST',
+                        'headers': {
+                            'Content-Type': 'application/json',
+                            'X-Honeypot-Token': wizardState.token
+                        },
+                        'status_code': 200
+                    }
+                }
+            }
+        }
+    };
+
+    // Add enabled services from checkboxes
+    document.querySelectorAll('.svc-check').forEach(function(cb) {
+        var key = cb.value;
+        var def = svcDefaults[key];
+        if (!def) return;
+        var portInput = document.getElementById('port-' + key);
+        var port = portInput ? parseInt(portInput.value) || def.defaultPort : def.defaultPort;
+        if (cb.checked) {
+            config[key + '.enabled'] = true;
+            config[key + '.port'] = port;
+            if (def.extra) {
+                for (var k in def.extra) config[k] = def.extra[k];
+            }
+        }
+    });
+
+    document.getElementById('wizardConfig').textContent = JSON.stringify(config, null, 4);
+
+    // Also update config blocks in deploy tabs
+    var configText = JSON.stringify(config, null, 4);
+    var dockerCfg = document.getElementById('wizardConfigDocker');
+    if (dockerCfg) dockerCfg.textContent = configText;
+    var manualCfg = document.getElementById('wizardConfigManual');
+    if (manualCfg) manualCfg.textContent = configText;
+    var tabCfg = document.getElementById('wizardConfigTab');
+    if (tabCfg) tabCfg.textContent = configText;
+    var offlineCfg = document.getElementById('wizardConfigOffline');
+    if (offlineCfg) offlineCfg.textContent = configText + "\nEOF";
+}
+
+function wizardNav(direction) {
+    // Regenerate config when leaving step 1 (services) going forward
+    if (currentWizardStep === 1 && direction === 1) {
+        regenerateConfig();
+    }
+
+    currentWizardStep += direction;
+    if (currentWizardStep < 1) currentWizardStep = 1;
+    if (currentWizardStep > totalWizardSteps) currentWizardStep = totalWizardSteps;
+
+    // Update step visibility
+    document.querySelectorAll('.wizard-step').forEach(function(el, i) {
+        el.classList.toggle('active', i + 1 === currentWizardStep);
+    });
+
+    // Update step dots
+    document.querySelectorAll('.step-dot').forEach(function(dot) {
+        var step = parseInt(dot.dataset.step);
+        dot.classList.remove('active', 'done');
+        if (step === currentWizardStep) dot.classList.add('active');
+        else if (step < currentWizardStep) dot.classList.add('done');
+    });
+
+    // Update buttons
+    document.getElementById('wizardPrev').style.display = currentWizardStep > 1 ? '' : 'none';
+    document.getElementById('wizardNext').style.display = currentWizardStep < totalWizardSteps ? '' : 'none';
+    document.getElementById('wizardDone').style.display = currentWizardStep === totalWizardSteps ? '' : 'none';
+}
+
+function copyToClipboard(elementId, btn) {
+    var el = document.getElementById(elementId);
+    var text = el.textContent;
+
+    function onSuccess() {
+        var origHtml = btn.innerHTML;
+        btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Copied';
+        btn.classList.remove('btn-outline-light');
+        btn.classList.add('btn-success');
+        setTimeout(function() {
+            btn.innerHTML = origHtml;
+            btn.classList.remove('btn-success');
+            btn.classList.add('btn-outline-light');
+        }, 2000);
+    }
+
+    // Try clipboard API first (works on HTTPS)
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(onSuccess).catch(function() {});
+        return;
+    }
+
+    // Fallback: execCommand with textarea.
+    // IMPORTANT: append inside the closest modal (if any) so Bootstrap's
+    // focus-trap doesn't steal focus away from the textarea.
+    var container = el.closest('.modal') || document.body;
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.top = '0';
+    ta.style.left = '0';
+    ta.style.width = '2px';
+    ta.style.height = '2px';
+    ta.style.padding = '0';
+    ta.style.border = 'none';
+    ta.style.outline = 'none';
+    ta.style.boxShadow = 'none';
+    ta.style.background = 'transparent';
+    ta.style.opacity = '0.01';
+    ta.style.zIndex = '99999';
+    container.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch(e) {}
+    container.removeChild(ta);
+    if (ok) { onSuccess(); }
+}
+
+function buildOfflineBundle(btn) {
+    if (event) event.preventDefault();
+    var origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Building...';
+
+    fetch('/api/v1/honeypot/offline/build', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        redirect: 'manual'
+    })
+    .then(function(resp) {
+        if (resp.type === 'opaqueredirect' || resp.status === 0) {
+            throw new Error('Session expired — please refresh the page and log in again.');
+        }
+        return resp.json();
+    })
+    .then(function(data) {
+        if (data.success) {
+            btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Done';
+            btn.classList.add('btn-success');
+            btn.classList.remove('btn-outline-success', 'btn-outline-info');
+            // Update bundle status in wizard if visible
+            var ready = document.getElementById('offlineBundleReady');
+            var notReady = document.getElementById('offlineBundleNotReady');
+            if (ready) ready.style.display = '';
+            if (notReady) notReady.style.display = 'none';
+            // If inside the wizard modal, don't reload — just update the UI
+            if (!btn.closest('.modal')) {
+                setTimeout(function() { window.location.href = '/honeypot'; }, 1500);
+            }
+        } else {
+            btn.innerHTML = '<i class="bi bi-x-lg me-1"></i>Failed';
+            btn.classList.add('btn-danger');
+            btn.classList.remove('btn-outline-success', 'btn-outline-info');
+            btn.disabled = false;
+            setTimeout(function() {
+                btn.innerHTML = origHtml;
+                btn.classList.remove('btn-danger');
+                btn.classList.add('btn-outline-success');
+            }, 3000);
+            console.error('Bundle build failed:', data.message);
+        }
+    })
+    .catch(function(err) {
+        btn.innerHTML = '<i class="bi bi-x-lg me-1"></i>Error';
+        btn.classList.add('btn-danger');
+        btn.disabled = false;
+        setTimeout(function() {
+            btn.innerHTML = origHtml;
+            btn.classList.remove('btn-danger');
+            btn.classList.add('btn-outline-success');
+        }, 3000);
+        console.error('Bundle build error:', err);
+    });
+}
+
+// Alert detail expand/collapse
+function toggleAlertDetail(detailId, clickedRow) {
+    var detailRow = document.getElementById(detailId);
+    if (!detailRow) return;
+
+    var isVisible = detailRow.style.display !== 'none';
+    if (isVisible) {
+        detailRow.style.display = 'none';
+        clickedRow.classList.remove('expanded');
+    } else {
+        detailRow.style.display = '';
+        clickedRow.classList.add('expanded');
+        // Populate detail grid on first open
+        var panel = detailRow.querySelector('.alert-detail-panel');
+        var grid = detailRow.querySelector('[id^="alert-grid-"]');
+        if (grid && !grid.dataset.loaded) {
+            grid.dataset.loaded = '1';
+            var rawStr = panel.dataset.raw || '{}';
+            var payload = {};
+            try { payload = JSON.parse(rawStr); } catch(e) {}
+            renderAlertDetail(grid, payload);
+        }
+    }
+}
+
+function renderAlertDetail(grid, data) {
+    var html = '';
+
+    function addItem(label, value, wide) {
+        if (value === undefined || value === null || value === '') return;
+        var cls = wide ? ' style="grid-column:1/-1"' : '';
+        html += '<div class="detail-item"' + cls + '>' +
+            '<div class="detail-label">' + escHtml(label) + '</div>' +
+            '<div class="detail-value">' + escHtml(String(value)) + '</div></div>';
+    }
+
+    function escHtml(s) {
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    // Core fields
+    addItem('Source IP', data.src_host);
+    addItem('Source Port', data.src_port);
+    addItem('Destination IP', data.dst_host);
+    addItem('Destination Port', data.dst_port);
+    addItem('Node ID', data['node_id']);
+    addItem('Log Type', data.logtype);
+    addItem('Local Time', data.local_time_adjusted || data.local_time);
+    addItem('UTC Time', data.utc_time);
+
+    // Log data — this is where the juicy stuff lives (usernames, passwords, etc.)
+    var logdata = data.logdata || {};
+    if (typeof logdata === 'string') {
+        try { logdata = JSON.parse(logdata); } catch(e) { logdata = {}; }
+    }
+
+    // Common logdata fields
+    addItem('Username', logdata.USERNAME);
+    addItem('Password', logdata.PASSWORD);
+    addItem('Session', logdata.SESSION);
+    addItem('Fingerprint', logdata.FINGERPRINT);
+    addItem('Path', logdata.PATH || logdata.FILENAME);
+    addItem('User Agent', logdata.USERAGENT);
+    addItem('Hostname', logdata.HOSTNAME);
+    addItem('Domain', logdata.DOMAIN);
+    addItem('Skin', logdata.SKIN);
+
+    // Any remaining logdata keys we haven't shown
+    var shown = ['USERNAME','PASSWORD','SESSION','FINGERPRINT','PATH','FILENAME','USERAGENT','HOSTNAME','DOMAIN','SKIN'];
+    for (var k in logdata) {
+        if (shown.indexOf(k) === -1 && logdata[k] !== null && logdata[k] !== '') {
+            var val = logdata[k];
+            if (typeof val === 'object') val = JSON.stringify(val, null, 2);
+            addItem(k, val);
+        }
+    }
+
+    if (!html) {
+        html = '<div class="detail-item" style="grid-column:1/-1"><div class="detail-value text-muted">No additional detail available for this event.</div></div>';
+    }
+
+    grid.innerHTML = html;
+}
+
+// SIEM Test Connection handlers
+function testElasticsearch() {
+    var btn = document.getElementById('test-elasticsearch-btn');
+    var result = document.getElementById('test-elasticsearch-result');
+    var origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Testing...';
+    result.textContent = '';
+    result.className = 'ms-2 small';
+
+    var payload = {
+        elastic_host: document.getElementById('elastic-host').value,
+        elastic_api_key: document.getElementById('elastic-api-key').value,
+        elastic_tls_verify: document.getElementById('elastic-tls-verify').checked ? 1 : 0
+    };
+
+    fetch('/honeypot/test-elasticsearch', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    })
+    .then(function(resp) { return resp.json(); })
+    .then(function(data) {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+        if (data.success) {
+            result.textContent = data.message || 'Connection successful';
+            result.className = 'ms-2 small text-success';
+        } else {
+            result.textContent = data.message || 'Connection failed';
+            result.className = 'ms-2 small text-danger';
+        }
+    })
+    .catch(function(err) {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+        result.textContent = 'Request failed: ' + err.message;
+        result.className = 'ms-2 small text-danger';
+    });
+}
+
+function testSyslog() {
+    var btn = document.getElementById('test-syslog-btn');
+    var result = document.getElementById('test-syslog-result');
+    var origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Testing...';
+    result.textContent = '';
+    result.className = 'ms-2 small';
+
+    var payload = {
+        syslog_host: document.getElementById('syslog-host').value,
+        syslog_port: parseInt(document.getElementById('syslog-port').value) || 514,
+        syslog_protocol: document.getElementById('syslog-protocol').value
+    };
+
+    fetch('/honeypot/test-syslog', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    })
+    .then(function(resp) { return resp.json(); })
+    .then(function(data) {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+        if (data.success) {
+            result.textContent = data.message || 'Connection successful';
+            result.className = 'ms-2 small text-success';
+        } else {
+            result.textContent = data.message || 'Connection failed';
+            result.className = 'ms-2 small text-danger';
+        }
+    })
+    .catch(function(err) {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+        result.textContent = 'Request failed: ' + err.message;
+        result.className = 'ms-2 small text-danger';
+    });
+}
+
+// Setup Wizard — trigger after registration
+{% if wizard_data %}
+(function() {
+    var wizData = {{ wizard_data | safe }};
+    function startWizard() {
+        try {
+            initSetupWizard(wizData);
+        } catch(e) {
+            console.error('Setup wizard error:', e);
+        }
+    }
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        setTimeout(startWizard, 100);
+    } else {
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(startWizard, 100);
+        });
+    }
+})();
+{% endif %}
+</script>
+{% endblock %}

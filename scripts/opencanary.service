@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenCanary Honeypot Daemon
+After=network.target
+
+[Service]
+Type=forking
+PIDFile=/var/run/opencanaryd.pid
+Environment=VIRTUAL_ENV=<VIRTUAL_ENV_PATH>
+Environment=PATH=<VIRTUAL_ENV_PATH>/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONPATH=<SITE_PACKAGES_PATH>
+ExecStart=<VIRTUAL_ENV_PATH>/bin/opencanaryd --start
+ExecStop=<VIRTUAL_ENV_PATH>/bin/opencanaryd --stop
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

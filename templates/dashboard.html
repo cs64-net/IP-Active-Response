@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Dashboard — SOC IP Blocker{% endblock %}
+{% block title %}Dashboard — IP Active Response{% endblock %}
 
 {% block extra_head %}
 <style>
@@ -23,6 +23,10 @@
     .stat-card.card-devices { background: linear-gradient(135deg, #3b82f6, #60a5fa); }
     .stat-card.card-online  { background: linear-gradient(135deg, #10b981, #34d399); }
     .stat-card.card-offline { background: linear-gradient(135deg, #ef4444, #f87171); }
+    .stat-card.card-pending { background: linear-gradient(135deg, #f59e0b, #fbbf24); }
+    .stat-card.card-in-progress { background: linear-gradient(135deg, #0ea5e9, #38bdf8); }
+    .stat-card.card-complete { background: linear-gradient(135deg, #10b981, #34d399); }
+    .stat-card.card-failed { background: linear-gradient(135deg, #dc2626, #f87171); }
     .stat-card .display-6 { font-weight: 700; }
 
     .blocklist-card { border-radius: 1rem; overflow: hidden; }
@@ -42,6 +46,50 @@
         transform: translateY(-3px);
         box-shadow: 0 8px 25px rgba(0,0,0,0.3);
     }
+    .auto-refresh-indicator {
+        font-size: 0.75rem;
+        opacity: 0.5;
+    }
+    .filter-btn.active { opacity: 1; }
+    .filter-btn:not(.active) { opacity: 0.5; }
+
+    /* Batch delete bar */
+    .batch-bar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 1050;
+        background: linear-gradient(135deg, #1e293b, #334155);
+        border-top: 2px solid #6366f1;
+        padding: 0.75rem 1.5rem;
+        display: none;
+        align-items: center;
+        justify-content: space-between;
+        box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+    }
+    .batch-bar.show { display: flex; }
+    .batch-bar .batch-count { color: #e2e8f0; font-weight: 600; }
+
+    /* Pagination */
+    .pagination-controls {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.25rem;
+        padding: 1rem 0;
+        flex-wrap: wrap;
+    }
+    .pagination-controls .page-info {
+        font-size: 0.85rem;
+        opacity: 0.6;
+        margin: 0 0.75rem;
+    }
+    .pagination-controls .btn { min-width: 2.25rem; }
+
+    /* Checkbox styling */
+    .row-checkbox { width: 1.1rem; height: 1.1rem; cursor: pointer; }
+    #select-all-cb { width: 1.1rem; height: 1.1rem; cursor: pointer; }
 </style>
 {% endblock %}
 
@@ -52,7 +100,7 @@
         <div class="card stat-card card-blocked text-white">
             <div class="card-body py-3">
                 <div class="text-white-50 small fw-semibold mb-1">Blocked IPs</div>
-                <p class="display-6 mb-0">{{ total_blocked }}</p>
+                <p class="display-6 mb-0" id="stat-blocked">{{ total_blocked }}</p>
             </div>
             <i class="bi bi-slash-circle stat-icon"></i>
         </div>
@@ -61,7 +109,7 @@
         <div class="card stat-card card-devices text-white">
             <div class="card-body py-3">
                 <div class="text-white-50 small fw-semibold mb-1">Total Devices</div>
-                <p class="display-6 mb-0">{{ total_devices }}</p>
+                <p class="display-6 mb-0" id="stat-devices">{{ total_devices }}</p>
             </div>
             <i class="bi bi-hdd-network stat-icon"></i>
         </div>
@@ -70,7 +118,7 @@
         <div class="card stat-card card-online text-white">
             <div class="card-body py-3">
                 <div class="text-white-50 small fw-semibold mb-1">Online</div>
-                <p class="display-6 mb-0">{{ online_count }}</p>
+                <p class="display-6 mb-0" id="stat-online">{{ online_count }}</p>
             </div>
             <i class="bi bi-check-circle stat-icon"></i>
         </div>
@@ -79,22 +127,62 @@
         <div class="card stat-card card-offline text-white">
             <div class="card-body py-3">
                 <div class="text-white-50 small fw-semibold mb-1">Offline</div>
-                <p class="display-6 mb-0">{{ offline_count }}</p>
+                <p class="display-6 mb-0" id="stat-offline">{{ offline_count }}</p>
             </div>
             <i class="bi bi-x-circle stat-icon"></i>
         </div>
     </div>
 </div>
 
-<!-- Add IP Form + Refresh -->
-<div class="row mb-4 g-3 align-items-end">
-    <div class="col-lg-8">
+<!-- Push Status Cards -->
+<div class="row g-3 mb-4">
+    <div class="col-6 col-lg-3">
+        <div class="card stat-card card-pending text-white">
+            <div class="card-body py-3">
+                <div class="text-white-50 small fw-semibold mb-1">Pending</div>
+                <p class="display-6 mb-0" id="sum-pending">0</p>
+            </div>
+            <i class="bi bi-clock stat-icon"></i>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card stat-card card-in-progress text-white">
+            <div class="card-body py-3">
+                <div class="text-white-50 small fw-semibold mb-1">In Progress</div>
+                <p class="display-6 mb-0" id="sum-in_progress">0</p>
+            </div>
+            <i class="bi bi-arrow-repeat stat-icon"></i>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card stat-card card-complete text-white">
+            <div class="card-body py-3">
+                <div class="text-white-50 small fw-semibold mb-1">Operations Complete</div>
+                <p class="display-6 mb-0" id="sum-completed">0</p>
+            </div>
+            <i class="bi bi-check-circle stat-icon"></i>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card stat-card card-failed text-white">
+            <div class="card-body py-3">
+                <div class="text-white-50 small fw-semibold mb-1">Failed</div>
+                <p class="display-6 mb-0" id="sum-failed">0</p>
+            </div>
+            <i class="bi bi-exclamation-triangle stat-icon"></i>
+        </div>
+    </div>
+</div>
+
+<!-- Add IP Form -->
+<div class="row mb-3">
+    <div class="col-12">
         <form id="add-ip-form" class="row g-2 align-items-end">
-            <div class="col-sm-4">
+            <div class="col-sm-4 col-lg-3">
                 <label for="ip_address" class="form-label small fw-semibold">IP Address / CIDR</label>
                 <input type="text" class="form-control" id="ip_address" name="ip_address" placeholder="e.g. 192.168.1.1 or 10.0.0.0/24" required>
             </div>
-            <div class="col-sm-4">
+            <div class="col-sm-4 col-lg-3">
                 <label for="note" class="form-label small fw-semibold">Note (optional)</label>
                 <input type="text" class="form-control" id="note" name="note" placeholder="Reason for blocking">
             </div>
@@ -102,23 +190,71 @@
                 <button type="submit" class="btn btn-primary" id="add-ip-btn">
                     <i class="bi bi-plus-circle me-1"></i>Block IP
                 </button>
+                <button type="button" class="btn btn-outline-primary ms-1" id="toggle-bulk-btn">
+                    <i class="bi bi-list-ul me-1"></i>Bulk Add
+                </button>
                 <span id="add-ip-result" class="ms-2"></span>
             </div>
         </form>
     </div>
-    <div class="col-lg-4 text-lg-end">
-        <button type="button" class="btn btn-outline-secondary me-2" onclick="location.reload()">
-            <i class="bi bi-arrow-clockwise me-1"></i>Refresh Web Page
-        </button>
-        <button type="button" class="btn btn-outline-primary" id="refresh-all-btn">
-            <i class="bi bi-arrow-repeat me-1"></i>Refresh All Devices
-        </button>
-        <span id="refresh-confirm" class="d-none ms-2">
-            <span class="text-warning small me-1">Health check + sync all devices?</span>
-            <button class="btn btn-sm btn-success" id="refresh-yes-btn">Yes</button>
-            <button class="btn btn-sm btn-secondary ms-1" id="refresh-no-btn">No</button>
-        </span>
-        <span id="refresh-result" class="ms-2 small"></span>
+</div>
+
+<!-- Bulk Add Panel -->
+<div class="row mb-3" id="bulk-add-panel" style="display:none">
+    <div class="col-12">
+        <div class="card" style="border-radius:0.75rem;border:1px solid rgba(255,255,255,0.06)">
+            <div class="card-body">
+                <label class="form-label small fw-semibold">Paste IPs / CIDRs (one per line)</label>
+                <textarea class="form-control mb-2" id="bulk-ips" rows="6"
+                    style="font-family:'Courier New',Courier,monospace;font-size:0.85rem"
+                    placeholder="10.0.0.0/24&#10;2001::/64&#10;10.0.1.32"></textarea>
+                <div class="d-flex align-items-center gap-2">
+                    <button type="button" class="btn btn-sm btn-primary" id="bulk-add-btn">
+                        <i class="bi bi-plus-circle me-1"></i>Block All
+                    </button>
+                    <span id="bulk-add-count" class="small text-muted"></span>
+                    <span id="bulk-add-result" class="small"></span>
+                </div>
+                <div id="bulk-validation-errors" class="mt-2 small"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Action Buttons -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            <span class="auto-refresh-indicator me-1"><i class="bi bi-arrow-repeat me-1"></i>Auto-refresh: 5s</span>
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="location.reload()">
+                <i class="bi bi-arrow-clockwise me-1"></i>Refresh Page
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-primary" id="refresh-all-btn">
+                <i class="bi bi-arrow-repeat me-1"></i>Refresh All Devices
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-warning" id="clear-stats-btn">
+                <i class="bi bi-eraser me-1"></i>Clear Stats
+            </button>
+            <span id="clear-stats-result" class="small"></span>
+            <span id="refresh-confirm" class="d-none">
+                <span class="text-warning small me-1">Health check + sync all devices?</span>
+                <button class="btn btn-sm btn-success" id="refresh-yes-btn">Yes</button>
+                <button class="btn btn-sm btn-secondary ms-1" id="refresh-no-btn">No</button>
+            </span>
+            <span id="refresh-result" class="small"></span>
+        </div>
+    </div>
+</div>
+
+<!-- Push Status Filters -->
+<div class="row mb-3">
+    <div class="col-12">
+        <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-sm btn-outline-light push-filter-btn active" data-push-status="">All</button>
+            <button class="btn btn-sm btn-outline-warning push-filter-btn" data-push-status="pending">Pending</button>
+            <button class="btn btn-sm btn-outline-info push-filter-btn" data-push-status="in_progress">In Progress</button>
+            <button class="btn btn-sm btn-outline-danger push-filter-btn" data-push-status="failed">Failed</button>
+        </div>
     </div>
 </div>
 
@@ -135,57 +271,50 @@
                 <table class="table table-hover mb-0" id="blocklist-table">
                     <thead>
                         <tr>
-                            <th class="sortable" data-col="0">IP Address / CIDR</th>
-                            <th class="sortable" data-col="1">Added By</th>
-                            <th class="sortable" data-col="2">Timestamp</th>
-                            <th class="sortable" data-col="3">Note</th>
+                            <th style="width:2.5rem"><input type="checkbox" id="select-all-cb" title="Select all on this page"></th>
+                            <th class="sortable" data-col="ip">IP Address / CIDR</th>
+                            <th class="sortable" data-col="added_by">Added By</th>
+                            <th class="sortable" data-col="added_at">Timestamp</th>
+                            <th class="sortable" data-col="note">Note</th>
                             <th>Push Status</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
-                    <tbody>
-                        {% for entry in blocklist %}
-                        <tr>
-                            <td><code>{{ entry.ip_address }}</code></td>
-                            <td>{{ entry.added_by }}</td>
-                            <td>{{ entry.added_at }}</td>
-                            <td>{{ entry.note or '—' }}</td>
-                            <td>
-                                {% for ps in entry.push_statuses %}
-                                    <span class="badge {% if ps.status == 'success' %}bg-success{% elif ps.status == 'failed' %}bg-danger{% else %}bg-warning text-dark{% endif %}" title="{{ ps.hostname }} ({{ ps.device_type }})">
-                                        {{ ps.friendly_name or ps.hostname }}: {{ ps.status }}
-                                    </span>
-                                {% else %}
-                                    <span class="text-muted">No devices</span>
-                                {% endfor %}
-                            </td>
-                            <td>
-                                <div class="d-flex align-items-center gap-1">
-                                    <button class="btn btn-sm btn-outline-danger remove-ip-btn" data-ip="{{ entry.ip_address }}">
-                                        <i class="bi bi-trash me-1"></i>Remove
-                                    </button>
-                                    <span class="remove-confirm d-none" data-ip="{{ entry.ip_address }}">
-                                        <span class="text-warning small me-1">Remove?</span>
-                                        <button class="btn btn-sm btn-danger remove-yes-btn" data-ip="{{ entry.ip_address }}">Yes</button>
-                                        <button class="btn btn-sm btn-secondary remove-no-btn ms-1">No</button>
-                                    </span>
-                                </div>
-                            </td>
-                        </tr>
-                        {% else %}
-                        <tr>
-                            <td colspan="6" class="text-center text-muted py-4">
-                                <i class="bi bi-shield-check d-block mb-2" style="font-size:2rem;opacity:0.3"></i>
-                                No blocked IPs
-                            </td>
-                        </tr>
-                        {% endfor %}
+                    <tbody id="blocklist-tbody">
                     </tbody>
                 </table>
+                </div>
+                <!-- Pagination -->
+                <div class="d-flex align-items-center justify-content-between flex-wrap px-3 py-2">
+                    <div class="d-flex align-items-center gap-2">
+                        <label for="page-size-select" class="small text-muted mb-0">Show</label>
+                        <select id="page-size-select" class="form-select form-select-sm" style="width:auto">
+                            <option value="25" selected>25</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                            <option value="500">500</option>
+                        </select>
+                        <span class="small text-muted mb-0">per page</span>
+                    </div>
+                    <div id="pagination-controls" class="pagination-controls mb-0 py-0"></div>
                 </div>
             </div>
         </div>
     </div>
+</div>
+
+<!-- Batch Delete Bar -->
+<div class="batch-bar" id="batch-bar">
+    <div class="d-flex align-items-center gap-3">
+        <span class="batch-count"><span id="batch-count-num">0</span> selected</span>
+        <button class="btn btn-sm btn-danger" id="batch-delete-btn">
+            <i class="bi bi-trash me-1"></i>Delete Selected
+        </button>
+        <button class="btn btn-sm btn-outline-light" id="batch-clear-btn">
+            <i class="bi bi-x-circle me-1"></i>Clear Selection
+        </button>
+    </div>
+    <span id="batch-result" class="small"></span>
 </div>
 
 <!-- Device Status Panel -->
@@ -195,7 +324,7 @@
             <div class="card-header py-3">
                 <h5 class="mb-0 fw-semibold"><i class="bi bi-hdd-stack me-2"></i>Device Status</h5>
             </div>
-            <div class="card-body">
+            <div class="card-body" id="device-panel">
                 {% if devices %}
                 <div class="row g-3">
                     {% for device in devices %}
@@ -205,8 +334,20 @@
                                 <div class="mb-2" style="font-size:2rem">
                                     {% if device.device_type == 'pfsense' %}
                                     <i class="bi bi-fire text-warning"></i>
-                                    {% else %}
+                                    {% elif device.device_type == 'linux' %}
                                     <i class="bi bi-terminal text-info"></i>
+                                    {% elif device.device_type == 'cisco_ios' %}
+                                    <i class="bi bi-hdd-network text-primary"></i>
+                                    {% elif device.device_type == 'cisco_asa' %}
+                                    <i class="bi bi-shield-lock text-danger"></i>
+                                    {% elif device.device_type == 'fortinet' %}
+                                    <i class="bi bi-shield-check text-success"></i>
+                                    {% elif device.device_type == 'palo_alto' %}
+                                    <i class="bi bi-shield-fill text-info"></i>
+                                    {% elif device.device_type == 'unifi' %}
+                                    <i class="bi bi-wifi text-secondary"></i>
+                                    {% else %}
+                                    <i class="bi bi-hdd text-muted"></i>
                                     {% endif %}
                                 </div>
                                 <h6 class="card-title fw-semibold mb-1">{{ device.friendly_name or device.hostname }}</h6>
@@ -214,7 +355,17 @@
                                 <p class="card-text mb-1"><small class="text-body-secondary"><code>{{ device.hostname }}</code></small></p>
                                 {% endif %}
                                 <p class="card-text mb-2">
-                                    <small class="text-body-secondary">{{ device.device_type | capitalize }}</small>
+                                    {% set device_type_labels = {
+                                        'pfsense': 'pfSense',
+                                        'linux': 'Linux',
+                                        'cisco_ios': 'Cisco IOS',
+                                        'cisco_asa': 'Cisco ASA',
+                                        'fortinet': 'Fortinet',
+                                        'palo_alto': 'Palo Alto',
+                                        'unifi': 'UniFi'
+                                    } %}
+                                    <small class="text-body-secondary">{{ device_type_labels.get(device.device_type, device.device_type | capitalize) }}</small>
+                                    <br><small class="text-body-secondary opacity-75">{{ device.block_method | replace('_', ' ') | capitalize }}</small>
                                 </p>
                                 <span class="badge rounded-pill {% if device.status == 'online' %}bg-success{% elif device.status == 'offline' %}bg-danger{% else %}bg-secondary{% endif %}">
                                     <i class="bi {% if device.status == 'online' %}bi-circle-fill{% elif device.status == 'offline' %}bi-circle{% else %}bi-question-circle{% endif %} me-1" style="font-size:0.5rem;vertical-align:middle"></i>
@@ -245,40 +396,424 @@
 {% block extra_scripts %}
 <script>
 (function() {
-    // Search / filter
+    var POLL_INTERVAL = 5000;
+    var PAGE_SIZE = 25;
+    var PAGE_SIZE_OPTIONS = [25, 50, 100, 500];
+
+    // --- State ---
+    var allData = [];          // Full blocklist from server
+    var filteredData = [];     // After search + push filter
+    var currentPage = 1;
+    var searchTerm = '';
+    var currentPushFilter = '';
+    var sortCol = '';
+    var sortAsc = true;
+    var selectedIPs = new Set();
+
+    // --- DOM refs ---
+    var tbody = document.getElementById('blocklist-tbody');
     var searchInput = document.getElementById('blocklist-search');
-    var table = document.getElementById('blocklist-table');
-    if (searchInput && table) {
-        searchInput.addEventListener('input', function() {
-            var filter = this.value.toLowerCase();
-            var rows = table.querySelectorAll('tbody tr');
-            rows.forEach(function(row) {
-                var text = row.textContent.toLowerCase();
-                row.style.display = text.indexOf(filter) > -1 ? '' : 'none';
+    var selectAllCb = document.getElementById('select-all-cb');
+    var batchBar = document.getElementById('batch-bar');
+    var batchCountNum = document.getElementById('batch-count-num');
+    var paginationDiv = document.getElementById('pagination-controls');
+
+    // Page size selector
+    var pageSizeSelect = document.getElementById('page-size-select');
+    pageSizeSelect.addEventListener('change', function() {
+        PAGE_SIZE = parseInt(this.value);
+        currentPage = 1;
+        applyFilters();
+    });
+
+    // --- Initial data from server-rendered page ---
+    var initialData = [
+        {% for entry in blocklist %}
+        {
+            ip_address: {{ entry.ip_address | tojson }},
+            added_by: {{ entry.added_by | tojson }},
+            added_at: {{ entry.added_at | tojson }},
+            note: {{ (entry.note or '') | tojson }},
+            push_statuses: [
+                {% for ps in entry.push_statuses %}
+                {
+                    hostname: {{ ps.hostname | tojson }},
+                    friendly_name: {{ (ps.friendly_name or '') | tojson }},
+                    device_type: {{ (ps.device_type or '') | tojson }},
+                    status: {{ ps.status | tojson }},
+                    error_message: {{ (ps.error_message or '') | tojson }}
+                }{% if not loop.last %},{% endif %}
+                {% endfor %}
+            ],
+            feed_sources: {{ entry.feed_sources | tojson }}
+        }{% if not loop.last %},{% endif %}
+        {% endfor %}
+    ];
+    allData = initialData;
+
+    // =====================
+    // FILTERING & SORTING
+    // =====================
+    function applyFilters() {
+        var term = searchTerm.toLowerCase();
+        filteredData = allData.filter(function(entry) {
+            // Search filter
+            if (term) {
+                var haystack = (entry.ip_address + ' ' + entry.added_by + ' ' + entry.added_at + ' ' + entry.note).toLowerCase();
+                if (haystack.indexOf(term) === -1) return false;
+            }
+            // Push status filter
+            if (currentPushFilter) {
+                var match = false;
+                (entry.push_statuses || []).forEach(function(ps) {
+                    if (ps.status === currentPushFilter) match = true;
+                });
+                if (!match) return false;
+            }
+            return true;
+        });
+
+        // Sort
+        if (sortCol) {
+            filteredData.sort(function(a, b) {
+                var aVal = (a[sortCol] || '').toString().toLowerCase();
+                var bVal = (b[sortCol] || '').toString().toLowerCase();
+                var cmp = aVal.localeCompare(bVal);
+                return sortAsc ? cmp : -cmp;
+            });
+        }
+
+        // Clamp page
+        var totalPages = Math.max(1, Math.ceil(filteredData.length / PAGE_SIZE));
+        if (currentPage > totalPages) currentPage = totalPages;
+
+        renderTable();
+        renderPagination();
+        updateBatchBar();
+        updateSelectAllState();
+    }
+
+    // =====================
+    // TABLE RENDERING
+    // =====================
+    function renderTable() {
+        if (filteredData.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">' +
+                '<i class="bi bi-shield-check d-block mb-2" style="font-size:2rem;opacity:0.3"></i>' +
+                'No blocked IPs</td></tr>';
+            return;
+        }
+
+        var start = (currentPage - 1) * PAGE_SIZE;
+        var end = Math.min(start + PAGE_SIZE, filteredData.length);
+        var pageData = filteredData.slice(start, end);
+
+        var html = '';
+        pageData.forEach(function(entry) {
+            var checked = selectedIPs.has(entry.ip_address) ? ' checked' : '';
+            var psHtml = '';
+            if (entry.push_statuses && entry.push_statuses.length > 0) {
+                entry.push_statuses.forEach(function(ps) {
+                    var cls = ps.status === 'success' ? 'bg-success'
+                        : ps.status === 'failed' ? 'bg-danger'
+                        : ps.status === 'in_progress' ? 'bg-info text-dark'
+                        : ps.status === 'pending' ? 'bg-warning text-dark'
+                        : 'bg-secondary';
+                    var label = ps.friendly_name || ps.hostname;
+                    var titleAttr = (ps.status === 'failed' && ps.error_message)
+                        ? ps.error_message
+                        : ps.hostname + ' (' + ps.device_type + ')';
+                    psHtml += '<span class="badge ' + cls + '" title="' + escHtml(titleAttr) + '">' +
+                        escHtml(label) + ': ' + ps.status + '</span> ';
+                });
+            } else {
+                psHtml = '<span class="text-muted">No devices</span>';
+            }
+
+            var feedHtml = '';
+            if (entry.feed_sources && entry.feed_sources.length > 0) {
+                entry.feed_sources.forEach(function(fn) {
+                    feedHtml += ' <span class="badge bg-info text-dark ms-1" title="Feed: ' + escHtml(fn) + '">' + escHtml(fn) + '</span>';
+                });
+            }
+
+            var addedByExtra = '';
+            if (entry.added_by && entry.added_by.indexOf('dns:') === 0) {
+                var domain = entry.added_by.substring(4);
+                addedByExtra = ' <span class="badge bg-info bg-opacity-25 text-info ms-1" title="DNS Block: ' + escHtml(domain) + '"><i class="bi bi-globe2 me-1"></i>' + escHtml(domain) + '</span>';
+            }
+            if (entry.added_by && entry.added_by.indexOf('honeypot:') === 0) {
+                addedByExtra = ' <span class="badge bg-warning bg-opacity-25 text-warning ms-1">OpenCanary</span>';
+            }
+
+            html += '<tr data-ip="' + escHtml(entry.ip_address) + '">' +
+                '<td><input type="checkbox" class="row-checkbox" value="' + escHtml(entry.ip_address) + '"' + checked + '></td>' +
+                '<td><code>' + escHtml(entry.ip_address) + '</code>' + feedHtml + '</td>' +
+                '<td>' + escHtml(entry.added_by) + addedByExtra + '</td>' +
+                '<td>' + escHtml(entry.added_at) + '</td>' +
+                '<td>' + escHtml(entry.note || '—') + '</td>' +
+                '<td>' + psHtml + '</td>' +
+                '<td><div class="d-flex align-items-center gap-1">' +
+                '<button class="btn btn-sm btn-outline-danger remove-ip-btn" data-ip="' + escHtml(entry.ip_address) + '">' +
+                '<i class="bi bi-trash me-1"></i>Remove</button>' +
+                '<span class="remove-confirm d-none" data-ip="' + escHtml(entry.ip_address) + '">' +
+                '<span class="text-warning small me-1">Remove?</span>' +
+                '<button class="btn btn-sm btn-danger remove-yes-btn" data-ip="' + escHtml(entry.ip_address) + '">Yes</button>' +
+                '<button class="btn btn-sm btn-secondary remove-no-btn ms-1">No</button>' +
+                '</span></div></td></tr>';
+        });
+        tbody.innerHTML = html;
+        bindRemoveButtons();
+        bindRowCheckboxes();
+    }
+
+    function escHtml(str) {
+        if (!str) return '';
+        return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // =====================
+    // PAGINATION
+    // =====================
+    function renderPagination() {
+        var total = filteredData.length;
+        var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+        if (totalPages <= 1) {
+            paginationDiv.innerHTML = total > 0
+                ? '<span class="page-info">' + total + ' IP' + (total !== 1 ? 's' : '') + '</span>'
+                : '';
+            return;
+        }
+
+        var start = (currentPage - 1) * PAGE_SIZE + 1;
+        var end = Math.min(currentPage * PAGE_SIZE, total);
+
+        var html = '<button class="btn btn-sm btn-outline-light" id="page-prev"' + (currentPage <= 1 ? ' disabled' : '') + '><i class="bi bi-chevron-left"></i></button>';
+
+        // Show page numbers with ellipsis for large page counts
+        var pages = [];
+        if (totalPages <= 7) {
+            for (var i = 1; i <= totalPages; i++) pages.push(i);
+        } else {
+            pages.push(1);
+            if (currentPage > 3) pages.push('...');
+            for (var i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) {
+                pages.push(i);
+            }
+            if (currentPage < totalPages - 2) pages.push('...');
+            pages.push(totalPages);
+        }
+
+        pages.forEach(function(p) {
+            if (p === '...') {
+                html += '<span class="btn btn-sm disabled opacity-50">…</span>';
+            } else {
+                html += '<button class="btn btn-sm ' + (p === currentPage ? 'btn-primary' : 'btn-outline-light') + ' page-num-btn" data-page="' + p + '">' + p + '</button>';
+            }
+        });
+
+        html += '<button class="btn btn-sm btn-outline-light" id="page-next"' + (currentPage >= totalPages ? ' disabled' : '') + '><i class="bi bi-chevron-right"></i></button>';
+        html += '<span class="page-info">Showing ' + start + '–' + end + ' of ' + total + '</span>';
+
+        paginationDiv.innerHTML = html;
+
+        // Bind pagination events
+        var prevBtn = document.getElementById('page-prev');
+        var nextBtn = document.getElementById('page-next');
+        if (prevBtn) prevBtn.addEventListener('click', function() { if (currentPage > 1) { currentPage--; applyFilters(); } });
+        if (nextBtn) nextBtn.addEventListener('click', function() { if (currentPage < totalPages) { currentPage++; applyFilters(); } });
+        document.querySelectorAll('.page-num-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                currentPage = parseInt(this.getAttribute('data-page'));
+                applyFilters();
             });
         });
     }
 
-    // Sortable columns
-    var headers = table ? table.querySelectorAll('th.sortable') : [];
-    headers.forEach(function(header) {
-        header.style.cursor = 'pointer';
-        header.addEventListener('click', function() {
-            var colIndex = parseInt(this.getAttribute('data-col'));
-            var tbody = table.querySelector('tbody');
-            var rows = Array.from(tbody.querySelectorAll('tr'));
-            var asc = this.getAttribute('data-order') !== 'asc';
-            this.setAttribute('data-order', asc ? 'asc' : 'desc');
-            rows.sort(function(a, b) {
-                var aText = (a.children[colIndex] ? a.children[colIndex].textContent.trim() : '');
-                var bText = (b.children[colIndex] ? b.children[colIndex].textContent.trim() : '');
-                return asc ? aText.localeCompare(bText) : bText.localeCompare(aText);
+    // =====================
+    // CHECKBOX / SELECTION
+    // =====================
+    function bindRowCheckboxes() {
+        document.querySelectorAll('.row-checkbox').forEach(function(cb) {
+            cb.addEventListener('change', function() {
+                if (this.checked) {
+                    selectedIPs.add(this.value);
+                } else {
+                    selectedIPs.delete(this.value);
+                }
+                updateBatchBar();
+                updateSelectAllState();
             });
-            rows.forEach(function(row) { tbody.appendChild(row); });
+        });
+    }
+
+    selectAllCb.addEventListener('change', function() {
+        var checked = this.checked;
+        document.querySelectorAll('.row-checkbox').forEach(function(cb) {
+            cb.checked = checked;
+            if (checked) selectedIPs.add(cb.value);
+            else selectedIPs.delete(cb.value);
+        });
+        updateBatchBar();
+    });
+
+    function updateSelectAllState() {
+        var boxes = document.querySelectorAll('.row-checkbox');
+        if (boxes.length === 0) { selectAllCb.checked = false; selectAllCb.indeterminate = false; return; }
+        var checkedCount = 0;
+        boxes.forEach(function(cb) { if (cb.checked) checkedCount++; });
+        selectAllCb.checked = checkedCount === boxes.length;
+        selectAllCb.indeterminate = checkedCount > 0 && checkedCount < boxes.length;
+    }
+
+    function updateBatchBar() {
+        var count = selectedIPs.size;
+        batchCountNum.textContent = count;
+        if (count > 0) batchBar.classList.add('show');
+        else batchBar.classList.remove('show');
+    }
+
+    // Batch delete
+    document.getElementById('batch-delete-btn').addEventListener('click', function() {
+        var ips = Array.from(selectedIPs);
+        if (ips.length === 0) return;
+        if (!confirm('Remove ' + ips.length + ' IP(s) from the blocklist?')) return;
+
+        var btn = this;
+        var resultSpan = document.getElementById('batch-result');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Deleting ' + ips.length + '...';
+        resultSpan.textContent = '';
+
+        fetch("{{ url_for('blocklist.remove_bulk') }}", {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ip_addresses: ips})
+        })
+        .then(function(resp) { return resp.json(); })
+        .then(function(data) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-trash me-1"></i>Delete Selected';
+            if (data.success) {
+                resultSpan.textContent = data.message;
+                resultSpan.className = 'small text-success';
+                selectedIPs.clear();
+                updateBatchBar();
+                pollDashboard();
+            } else {
+                resultSpan.textContent = data.message;
+                resultSpan.className = 'small text-danger';
+            }
+        })
+        .catch(function() {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-trash me-1"></i>Delete Selected';
+            resultSpan.textContent = 'Request failed.';
+            resultSpan.className = 'small text-danger';
         });
     });
 
-    // AJAX add IP
+    document.getElementById('batch-clear-btn').addEventListener('click', function() {
+        selectedIPs.clear();
+        updateBatchBar();
+        document.querySelectorAll('.row-checkbox').forEach(function(cb) { cb.checked = false; });
+        selectAllCb.checked = false;
+        selectAllCb.indeterminate = false;
+    });
+
+    // =====================
+    // SEARCH
+    // =====================
+    searchInput.addEventListener('input', function() {
+        searchTerm = this.value;
+        currentPage = 1;
+        applyFilters();
+    });
+
+    // =====================
+    // SORTABLE COLUMNS
+    // =====================
+    document.querySelectorAll('th.sortable').forEach(function(header) {
+        header.style.cursor = 'pointer';
+        header.addEventListener('click', function() {
+            var col = this.getAttribute('data-col');
+            if (sortCol === col) {
+                sortAsc = !sortAsc;
+            } else {
+                sortCol = col;
+                sortAsc = true;
+            }
+            this.setAttribute('data-order', sortAsc ? 'asc' : 'desc');
+            applyFilters();
+        });
+    });
+
+    // =====================
+    // PUSH STATUS FILTER
+    // =====================
+    document.querySelectorAll('.push-filter-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('.push-filter-btn').forEach(function(b) { b.classList.remove('active'); });
+            this.classList.add('active');
+            currentPushFilter = this.getAttribute('data-push-status');
+            currentPage = 1;
+            applyFilters();
+        });
+    });
+
+    // =====================
+    // REMOVE SINGLE IP
+    // =====================
+    function bindRemoveButtons() {
+        document.querySelectorAll('.remove-ip-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var ip = this.getAttribute('data-ip');
+                this.classList.add('d-none');
+                var confirmSpan = this.parentElement.querySelector('.remove-confirm[data-ip="' + ip + '"]');
+                if (confirmSpan) confirmSpan.classList.remove('d-none');
+            });
+        });
+        document.querySelectorAll('.remove-no-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var confirmSpan = this.closest('.remove-confirm');
+                confirmSpan.classList.add('d-none');
+                confirmSpan.parentElement.querySelector('.remove-ip-btn').classList.remove('d-none');
+            });
+        });
+        document.querySelectorAll('.remove-yes-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var ip = this.getAttribute('data-ip');
+                var row = this.closest('tr');
+                var confirmSpan = this.closest('.remove-confirm');
+                this.disabled = true;
+                this.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+                fetch("{{ url_for('blocklist.remove_ip', ip='__IP__') }}".replace('__IP__', ip), {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                })
+                .then(function(resp) { return resp.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        row.style.transition = 'opacity 0.3s';
+                        row.style.opacity = '0';
+                        selectedIPs.delete(ip);
+                        setTimeout(function() { pollDashboard(); }, 300);
+                    } else {
+                        confirmSpan.innerHTML = '<span class="text-danger small">' + data.message + '</span>';
+                    }
+                })
+                .catch(function() {
+                    confirmSpan.innerHTML = '<span class="text-danger small">Request failed.</span>';
+                });
+            });
+        });
+    }
+
+    // =====================
+    // ADD IP (AJAX)
+    // =====================
     var addForm = document.getElementById('add-ip-form');
     if (addForm) {
         addForm.addEventListener('submit', function(e) {
@@ -306,7 +841,7 @@
                 if (data.success) {
                     document.getElementById('ip_address').value = '';
                     document.getElementById('note').value = '';
-                    setTimeout(function() { location.reload(); }, 1500);
+                    pollDashboard();
                 }
             })
             .catch(function() {
@@ -318,54 +853,97 @@
         });
     }
 
-    // AJAX remove IP — inline confirmation
-    document.querySelectorAll('.remove-ip-btn').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            var ip = this.getAttribute('data-ip');
-            // Show inline confirm, hide the remove button
-            this.classList.add('d-none');
-            var confirmSpan = this.parentElement.querySelector('.remove-confirm[data-ip="' + ip + '"]');
-            if (confirmSpan) confirmSpan.classList.remove('d-none');
+    // =====================
+    // BULK ADD
+    // =====================
+    var bulkPanel = document.getElementById('bulk-add-panel');
+    var toggleBulkBtn = document.getElementById('toggle-bulk-btn');
+    var bulkTextarea = document.getElementById('bulk-ips');
+    var bulkCountSpan = document.getElementById('bulk-add-count');
+
+    toggleBulkBtn.addEventListener('click', function() {
+        var visible = bulkPanel.style.display !== 'none';
+        bulkPanel.style.display = visible ? 'none' : '';
+        this.classList.toggle('active', !visible);
+    });
+
+    function isValidIPorCIDR(s) {
+        if (/^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/.test(s)) return true;
+        if (/^[0-9a-fA-F:]+(::[0-9a-fA-F:]*)?(%\w+)?(\/\d{1,3})?$/.test(s) && s.indexOf(':') !== -1) return true;
+        return false;
+    }
+
+    bulkTextarea.addEventListener('input', function() {
+        var lines = this.value.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+        var valid = 0, invalid = [];
+        lines.forEach(function(line) {
+            if (isValidIPorCIDR(line)) valid++;
+            else invalid.push(line);
+        });
+        bulkCountSpan.textContent = valid + ' valid IP(s)' + (invalid.length ? ', ' + invalid.length + ' invalid' : '');
+        var errDiv = document.getElementById('bulk-validation-errors');
+        if (invalid.length > 0 && invalid.length <= 10) {
+            errDiv.innerHTML = '<span class="text-warning">Invalid: ' + invalid.map(function(i) { return '<code>' + i + '</code>'; }).join(', ') + '</span>';
+        } else if (invalid.length > 10) {
+            errDiv.innerHTML = '<span class="text-warning">' + invalid.length + ' invalid entries</span>';
+        } else {
+            errDiv.innerHTML = '';
+        }
+    });
+
+    document.getElementById('bulk-add-btn').addEventListener('click', function() {
+        var lines = bulkTextarea.value.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+        var valid = lines.filter(isValidIPorCIDR);
+        var invalid = lines.filter(function(l) { return !isValidIPorCIDR(l); });
+        var resultSpan = document.getElementById('bulk-add-result');
+        var errDiv = document.getElementById('bulk-validation-errors');
+
+        if (valid.length === 0) {
+            resultSpan.textContent = 'No valid IPs to add.';
+            resultSpan.className = 'small text-danger';
+            return;
+        }
+        if (invalid.length > 0) {
+            if (!confirm(invalid.length + ' invalid entries will be skipped. Continue with ' + valid.length + ' valid IP(s)?')) return;
+        }
+
+        var btn = this;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Adding ' + valid.length + ' IPs...';
+        resultSpan.textContent = '';
+        errDiv.innerHTML = '';
+
+        fetch("{{ url_for('blocklist.add_bulk') }}", {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ip_addresses: valid, note: 'Bulk add'})
+        })
+        .then(function(resp) { return resp.json(); })
+        .then(function(data) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-plus-circle me-1"></i>Block All';
+            if (data.success) {
+                resultSpan.textContent = data.message;
+                resultSpan.className = 'small text-success';
+                bulkTextarea.value = '';
+                bulkCountSpan.textContent = '';
+                pollDashboard();
+            } else {
+                resultSpan.textContent = data.message;
+                resultSpan.className = 'small text-danger';
+            }
+        })
+        .catch(function() {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-plus-circle me-1"></i>Block All';
+            resultSpan.textContent = 'Request failed.';
+            resultSpan.className = 'small text-danger';
         });
     });
 
-    document.querySelectorAll('.remove-no-btn').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            var confirmSpan = this.closest('.remove-confirm');
-            confirmSpan.classList.add('d-none');
-            confirmSpan.parentElement.querySelector('.remove-ip-btn').classList.remove('d-none');
-        });
-    });
-
-    document.querySelectorAll('.remove-yes-btn').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            var ip = this.getAttribute('data-ip');
-            var row = this.closest('tr');
-            var confirmSpan = this.closest('.remove-confirm');
-            this.disabled = true;
-            this.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-
-            fetch("{{ url_for('blocklist.remove_ip', ip='__IP__') }}".replace('__IP__', ip), {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'}
-            })
-            .then(function(resp) { return resp.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    row.style.transition = 'opacity 0.3s';
-                    row.style.opacity = '0';
-                    setTimeout(function() { row.remove(); }, 300);
-                } else {
-                    confirmSpan.innerHTML = '<span class="text-danger small">' + data.message + '</span>';
-                }
-            })
-            .catch(function() {
-                confirmSpan.innerHTML = '<span class="text-danger small">Request failed.</span>';
-            });
-        });
-    });
-
-    // AJAX Refresh All Devices — inline confirmation
+    // =====================
+    // REFRESH ALL DEVICES
+    // =====================
     var refreshAllBtn = document.getElementById('refresh-all-btn');
     var refreshConfirm = document.getElementById('refresh-confirm');
     var refreshYesBtn = document.getElementById('refresh-yes-btn');
@@ -377,14 +955,12 @@
             refreshConfirm.classList.remove('d-none');
         });
     }
-
     if (refreshNoBtn) {
         refreshNoBtn.addEventListener('click', function() {
             refreshConfirm.classList.add('d-none');
             refreshAllBtn.classList.remove('d-none');
         });
     }
-
     if (refreshYesBtn) {
         refreshYesBtn.addEventListener('click', function() {
             var resultSpan = document.getElementById('refresh-result');
@@ -404,9 +980,7 @@
                 resultSpan.className = 'ms-2 small ' + (data.success ? 'text-success' : 'text-danger');
                 refreshAllBtn.disabled = false;
                 refreshAllBtn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>Refresh All Devices';
-                if (data.success) {
-                    setTimeout(function() { location.reload(); }, 2000);
-                }
+                if (data.success) pollDashboard();
             })
             .catch(function() {
                 resultSpan.textContent = 'Request failed.';
@@ -416,6 +990,160 @@
             });
         });
     }
+
+    // =====================
+    // CLEAR STATS
+    // =====================
+    var clearStatsBtn = document.getElementById('clear-stats-btn');
+    if (clearStatsBtn) {
+        clearStatsBtn.addEventListener('click', function() {
+            if (!confirm('Clear pending, in-progress, and failed push statuses?')) return;
+            var resultSpan = document.getElementById('clear-stats-result');
+            clearStatsBtn.disabled = true;
+            clearStatsBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Clearing...';
+            resultSpan.textContent = '';
+
+            fetch('/api/dashboard/clear-stats', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            })
+            .then(function(resp) { return resp.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    resultSpan.textContent = 'Stats cleared.';
+                    resultSpan.className = 'ms-2 small text-success';
+                    pollDashboard();
+                } else {
+                    resultSpan.textContent = data.message || 'Clear failed.';
+                    resultSpan.className = 'ms-2 small text-danger';
+                }
+                clearStatsBtn.disabled = false;
+                clearStatsBtn.innerHTML = '<i class="bi bi-eraser me-1"></i>Clear Stats';
+            })
+            .catch(function() {
+                resultSpan.textContent = 'Request failed.';
+                resultSpan.className = 'ms-2 small text-danger';
+                clearStatsBtn.disabled = false;
+                clearStatsBtn.innerHTML = '<i class="bi bi-eraser me-1"></i>Clear Stats';
+            });
+        });
+    }
+
+    // =====================
+    // LIVE POLLING
+    // =====================
+    function pollDashboard() {
+        Promise.all([
+            fetch('/api/dashboard').then(function(r) { return r.json(); }),
+            fetch('/api/operations').then(function(r) { return r.json(); })
+        ])
+        .then(function(results) {
+            var data = results[0];
+            var opsData = results[1];
+
+            // Update stat cards
+            var el;
+            el = document.getElementById('stat-blocked');
+            if (el) el.textContent = data.total_blocked;
+            el = document.getElementById('stat-devices');
+            if (el) el.textContent = data.total_devices;
+            el = document.getElementById('stat-online');
+            if (el) el.textContent = data.online_count;
+            el = document.getElementById('stat-offline');
+            if (el) el.textContent = data.offline_count;
+
+            // Update device panel
+            var deviceContainer = document.getElementById('device-panel');
+            if (deviceContainer && data.devices) {
+                if (data.devices.length === 0) {
+                    deviceContainer.innerHTML =
+                        '<div class="text-center py-4">' +
+                        '<i class="bi bi-hdd-network d-block mb-2" style="font-size:2rem;opacity:0.3"></i>' +
+                        '<p class="text-muted mb-0">No devices registered.</p></div>';
+                } else {
+                    var html = '<div class="row g-3">';
+                    var deviceIcons = {
+                        'pfsense': '<i class="bi bi-fire text-warning"></i>',
+                        'linux': '<i class="bi bi-terminal text-info"></i>',
+                        'cisco_ios': '<i class="bi bi-hdd-network text-primary"></i>',
+                        'cisco_asa': '<i class="bi bi-shield-lock text-danger"></i>',
+                        'fortinet': '<i class="bi bi-shield-check text-success"></i>',
+                        'palo_alto': '<i class="bi bi-shield-fill text-info"></i>',
+                        'unifi': '<i class="bi bi-wifi text-secondary"></i>'
+                    };
+                    var deviceTypeLabels = {
+                        'pfsense': 'pfSense',
+                        'linux': 'Linux',
+                        'cisco_ios': 'Cisco IOS',
+                        'cisco_asa': 'Cisco ASA',
+                        'fortinet': 'Fortinet',
+                        'palo_alto': 'Palo Alto',
+                        'unifi': 'UniFi'
+                    };
+                    data.devices.forEach(function(d) {
+                        var icon = deviceIcons[d.device_type] || '<i class="bi bi-hdd text-muted"></i>';
+                        var statusClass = d.status === 'online' ? 'bg-success'
+                            : d.status === 'offline' ? 'bg-danger' : 'bg-secondary';
+                        var statusIcon = d.status === 'online' ? 'bi-circle-fill'
+                            : d.status === 'offline' ? 'bi-circle' : 'bi-question-circle';
+                        var displayName = d.friendly_name || d.hostname;
+                        var hostnameRow = d.friendly_name
+                            ? '<p class="card-text mb-1"><small class="text-body-secondary"><code>' + d.hostname + '</code></small></p>'
+                            : '';
+                        var blockMethod = d.block_method ? d.block_method.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); }) : '';
+                        var syncRow = d.total_blocked > 0
+                            ? '<div class="mt-2"><small class="text-body-secondary">' + d.synced_count + '/' + d.total_blocked + ' rules synced</small></div>'
+                            : '';
+                        html += '<div class="col-md-4 col-lg-3">' +
+                            '<div class="card device-card h-100"><div class="card-body text-center py-4">' +
+                            '<div class="mb-2" style="font-size:2rem">' + icon + '</div>' +
+                            '<h6 class="card-title fw-semibold mb-1">' + displayName + '</h6>' +
+                            hostnameRow +
+                            '<p class="card-text mb-2"><small class="text-body-secondary">' + (deviceTypeLabels[d.device_type] || d.device_type.charAt(0).toUpperCase() + d.device_type.slice(1)) + '</small>' +
+                            (blockMethod ? '<br><small class="text-body-secondary opacity-75">' + blockMethod + '</small>' : '') +
+                            '</p>' +
+                            '<span class="badge rounded-pill ' + statusClass + '">' +
+                            '<i class="bi ' + statusIcon + ' me-1" style="font-size:0.5rem;vertical-align:middle"></i>' +
+                            d.status.charAt(0).toUpperCase() + d.status.slice(1) + '</span>' +
+                            syncRow +
+                            '</div></div></div>';
+                    });
+                    html += '</div>';
+                    deviceContainer.innerHTML = html;
+                }
+            }
+
+            // Update blocklist data — preserve current page & selections
+            allData = data.blocklist || [];
+
+            // Prune selections that no longer exist
+            var currentIPs = new Set(allData.map(function(e) { return e.ip_address; }));
+            selectedIPs.forEach(function(ip) {
+                if (!currentIPs.has(ip)) selectedIPs.delete(ip);
+            });
+
+            applyFilters();
+
+            // Update push summary from operations API
+            var summary = opsData.summary || {};
+            el = document.getElementById('sum-pending');
+            if (el) el.textContent = summary.pending || 0;
+            el = document.getElementById('sum-in_progress');
+            if (el) el.textContent = summary.in_progress || 0;
+            el = document.getElementById('sum-completed');
+            if (el) el.textContent = summary.completed || 0;
+            el = document.getElementById('sum-failed');
+            if (el) el.textContent = summary.failed || 0;
+        })
+        .catch(function() {});
+    }
+
+    // Initial render
+    applyFilters();
+
+    // Start polling
+    pollDashboard();
+    setInterval(pollDashboard, POLL_INTERVAL);
 })();
 </script>
 {% endblock %}

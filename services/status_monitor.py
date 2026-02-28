@@ -74,8 +74,13 @@ class StatusMonitor:
         logger.info("Health check complete: %s", results)
         return results
 
+    CLOUD_DEVICE_TYPES = {"aws_waf", "azure_nsg", "gcp_firewall", "oci_nsg"}
+
     def check_device(self, device: Dict) -> str:
-        """Check a single device's connectivity via basic HTTP(S) request.
+        """Check a single device's connectivity.
+
+        For on-prem devices, uses HTTP(S) or socket checks.
+        For cloud devices, instantiates the cloud client and calls check_health().
 
         Args:
             device: Device dict with keys from managed_devices table.
@@ -85,12 +90,21 @@ class StatusMonitor:
         """
         import requests
         hostname = device.get("hostname", "")
+        device_type = device.get("device_type", "")
         try:
-            if device["device_type"] == "pfsense":
+            if device_type in self.CLOUD_DEVICE_TYPES:
+                from services.push_orchestrator import CLIENT_REGISTRY
+                factory = CLIENT_REGISTRY.get(device_type)
+                if factory is None:
+                    logger.debug("No factory for cloud device type %s", device_type)
+                    return "offline"
+                client = factory(device)
+                return "online" if client.check_health() else "offline"
+            elif device_type == "pfsense":
                 url = hostname if hostname.startswith(("http://", "https://")) else f"https://{hostname}"
                 resp = requests.get(f"{url}/index.php", timeout=10, verify=False)
                 return "online" if resp.status_code == 200 else "offline"
-            elif device["device_type"] == "linux":
+            elif device_type in ("linux", "cisco_ios", "cisco_asa", "fortinet", "palo_alto"):
                 import socket
                 port = device.get("ssh_port", 22)
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -98,6 +112,11 @@ class StatusMonitor:
                 result = sock.connect_ex((hostname, port))
                 sock.close()
                 return "online" if result == 0 else "offline"
+            elif device_type == "unifi":
+                api_port = device.get("api_port", 443)
+                url = f"https://{hostname}:{api_port}/"
+                resp = requests.get(url, timeout=10, verify=False)
+                return "online" if resp.status_code == 200 else "offline"
             else:
                 return "offline"
         except Exception as e:

@@ -60,7 +60,9 @@ class BlocklistService:
             network = ipaddress.ip_network(ip_str, strict=False)
             normalized = str(network)
         else:
-            normalized = str(ipaddress.ip_address(ip_str)) + "/32"
+            addr = ipaddress.ip_address(ip_str)
+            suffix = "/128" if isinstance(addr, ipaddress.IPv6Address) else "/32"
+            normalized = str(addr) + suffix
 
         # Check against protected ranges
         self._check_protected_ranges(normalized)
@@ -84,6 +86,136 @@ class BlocklistService:
             ).fetchone()
 
         return dict(row)
+
+    def add_ips_bulk(self, ip_addresses: List[str], user: str, note: str = "",
+                     skip_invalid: bool = False) -> Dict:
+        """Validate and add multiple IPs to the blocklist.
+
+        By default (skip_invalid=False) the batch is all-or-nothing: if any IP
+        is invalid, duplicated, already blocked, or in a protected range the
+        entire batch is rejected.
+
+        When skip_invalid=True (used by feed syncs), bad IPs are silently
+        filtered out and the remaining valid IPs are inserted.  Skipped IPs
+        are reported in the returned ``skipped`` list for logging.
+
+        Args:
+            ip_addresses: List of IPv4/IPv6 addresses or CIDR notations to block.
+            user: Username of the person adding the blocks.
+            note: Optional note for the entries.
+            skip_invalid: If True, skip bad IPs instead of rejecting the batch.
+
+        Returns:
+            Dict with "added" (list of added IP dicts), "errors" (list of error
+            strings), and "skipped" (list of skipped IP strings, only when
+            skip_invalid=True).
+        """
+        errors = []
+        skipped = []
+        normalized_ips = []
+
+        # Phase 1: Validate all IPs and normalize
+        for ip in ip_addresses:
+            ip_str = ip.strip()
+            valid, error_msg = self.validate_ip(ip_str)
+            if not valid:
+                if skip_invalid:
+                    skipped.append(ip_str)
+                    continue
+                errors.append(f"Invalid IP address '{ip_str}': {error_msg}")
+                continue
+
+            if "/" in ip_str:
+                network = ipaddress.ip_network(ip_str, strict=False)
+                normalized = str(network)
+            else:
+                addr = ipaddress.ip_address(ip_str)
+                suffix = "/128" if isinstance(addr, ipaddress.IPv6Address) else "/32"
+                normalized = str(addr) + suffix
+
+            normalized_ips.append(normalized)
+
+        # Phase 2: Check for duplicates within the batch
+        seen = set()
+        deduped = []
+        for norm_ip in normalized_ips:
+            if norm_ip in seen:
+                if skip_invalid:
+                    skipped.append(norm_ip)
+                else:
+                    errors.append(f"Duplicate IP in batch: {norm_ip}")
+            else:
+                seen.add(norm_ip)
+                deduped.append(norm_ip)
+        normalized_ips = deduped
+
+        # Phase 3: Check protected ranges (before opening DB transaction)
+        if skip_invalid:
+            filtered = []
+            for norm_ip in normalized_ips:
+                try:
+                    self._check_protected_ranges(norm_ip)
+                    filtered.append(norm_ip)
+                except ValueError:
+                    skipped.append(norm_ip)
+            normalized_ips = filtered
+        else:
+            for norm_ip in normalized_ips:
+                try:
+                    self._check_protected_ranges(norm_ip)
+                except ValueError as e:
+                    errors.append(str(e))
+
+        # Phase 4: Check for existing entries in DB
+        if skip_invalid:
+            filtered = []
+            with get_db(self.db_path) as conn:
+                for norm_ip in normalized_ips:
+                    existing = conn.execute(
+                        "SELECT id FROM block_entries WHERE ip_address = ?",
+                        (norm_ip,),
+                    ).fetchone()
+                    if existing:
+                        skipped.append(norm_ip)
+                    else:
+                        filtered.append(norm_ip)
+            normalized_ips = filtered
+        else:
+            if not errors:
+                with get_db(self.db_path) as conn:
+                    for norm_ip in normalized_ips:
+                        existing = conn.execute(
+                            "SELECT id FROM block_entries WHERE ip_address = ?",
+                            (norm_ip,),
+                        ).fetchone()
+                        if existing:
+                            errors.append(
+                                f"IP address {norm_ip} is already in the blocklist"
+                            )
+
+        # All-or-nothing when not skipping: if any errors, reject entire batch
+        if not skip_invalid and errors:
+            return {"added": [], "errors": errors, "skipped": []}
+
+        if not normalized_ips:
+            return {"added": [], "errors": errors, "skipped": skipped}
+
+        # Phase 5: Insert all valid IPs in a single transaction
+        added = []
+        with get_db(self.db_path) as conn:
+            for norm_ip in normalized_ips:
+                conn.execute(
+                    "INSERT INTO block_entries (ip_address, added_by, note) VALUES (?, ?, ?)",
+                    (norm_ip, user, note),
+                )
+                row = conn.execute(
+                    "SELECT id, ip_address, added_by, added_at, note FROM block_entries WHERE ip_address = ?",
+                    (norm_ip,),
+                ).fetchone()
+                added.append(dict(row))
+
+        return {"added": added, "errors": errors, "skipped": skipped}
+
 
     def _check_protected_ranges(self, normalized_ip: str) -> None:
         """Check if an IP/CIDR falls within any protected range.
@@ -137,18 +269,85 @@ class BlocklistService:
             ValueError: If IP is not found in the blocklist.
         """
         ip_str = ip_address.strip()
+
+        # Normalize to match stored form
+        if "/" in ip_str:
+            network = ipaddress.ip_network(ip_str, strict=False)
+            normalized = str(network)
+        else:
+            addr = ipaddress.ip_address(ip_str)
+            suffix = "/128" if isinstance(addr, ipaddress.IPv6Address) else "/32"
+            normalized = str(addr) + suffix
+
         with get_db(self.db_path) as conn:
             existing = conn.execute(
                 "SELECT id FROM block_entries WHERE ip_address = ?",
-                (ip_str,),
+                (normalized,),
             ).fetchone()
             if not existing:
-                raise ValueError(f"IP address {ip_str} not found in the blocklist")
+                raise ValueError(f"IP address {normalized} not found in the blocklist")
 
             conn.execute(
                 "DELETE FROM block_entries WHERE ip_address = ?",
-                (ip_str,),
+                (normalized,),
             )
+
+    def remove_ips_bulk(self, ip_addresses: List[str]) -> Dict:
+        """Remove multiple IPs from the blocklist atomically in a single transaction.
+
+        All specified IPs are normalized and removed in one transaction.
+        IPs that don't exist in the blocklist are silently skipped (not treated as errors).
+        Associated push_statuses are cascade-deleted via foreign key constraint.
+
+        Args:
+            ip_addresses: List of IPv4/IPv6 addresses or CIDR notations to remove.
+
+        Returns:
+            Dict with "removed" (list of IP strings removed) and "errors" (list of error strings).
+        """
+        errors = []
+        normalized_ips = []
+
+        # Phase 1: Validate and normalize all IPs
+        for ip in ip_addresses:
+            ip_str = ip.strip()
+            valid, error_msg = self.validate_ip(ip_str)
+            if not valid:
+                errors.append(f"Invalid IP address '{ip_str}': {error_msg}")
+                continue
+
+            if "/" in ip_str:
+                network = ipaddress.ip_network(ip_str, strict=False)
+                normalized = str(network)
+            else:
+                addr = ipaddress.ip_address(ip_str)
+                suffix = "/128" if isinstance(addr, ipaddress.IPv6Address) else "/32"
+                normalized = str(addr) + suffix
+
+            normalized_ips.append(normalized)
+
+        if errors:
+            return {"removed": [], "errors": errors}
+
+        # Phase 2: Remove all IPs in a single transaction (atomic)
+        removed = []
+        with get_db(self.db_path) as conn:
+            for norm_ip in normalized_ips:
+                existing = conn.execute(
+                    "SELECT id FROM block_entries WHERE ip_address = ?",
+                    (norm_ip,),
+                ).fetchone()
+                if existing:
+                    conn.execute(
+                        "DELETE FROM block_entries WHERE ip_address = ?",
+                        (norm_ip,),
+                    )
+                    removed.append(norm_ip)
+                # Non-existent IPs are silently skipped
+
+        return {"removed": removed, "errors": []}
+
+
 
     def get_blocklist(self) -> List[Dict]:
         """Return all current blocklist entries with push status.

@@ -1,39 +1,22 @@
 """Blocklist routes for adding and removing IPs."""
 
 import logging
-import threading
 
 from flask import Blueprint, flash, jsonify, redirect, request, session, url_for
 
 from auth import login_required
 from config import Config
-from database import get_db
-from services.blocklist_service import BlocklistService
-from services.device_manager import DeviceManager
-from services.push_engine import PushEngine
+from services.rules_engine import RulesEngine
 
 logger = logging.getLogger(__name__)
 
 blocklist_bp = Blueprint("blocklist", __name__)
 
 
-def _push_in_background(ip_address, devices, action, db_path, block_entry_id=None):
-    """Run push/remove in a background thread so the request returns immediately."""
-    try:
-        engine = PushEngine(db_path=db_path)
-        if action == "block":
-            engine.push_block(ip_address, devices)
-        else:
-            engine.remove_block(ip_address, devices, block_entry_id=block_entry_id)
-        logger.info("Background %s for %s completed on %d device(s)", action, ip_address, len(devices))
-    except Exception as e:
-        logger.error("Background %s for %s failed: %s", action, ip_address, e)
-
-
 @blocklist_bp.route("/blocklist/add", methods=["POST"])
 @login_required
 def add_ip():
-    """Add an IP to the blocklist. Push to devices happens in background."""
+    """Add an IP to the blocklist. Operations are enqueued asynchronously."""
     # Support both form and JSON
     if request.is_json:
         data = request.get_json()
@@ -45,29 +28,29 @@ def add_ip():
 
     user = session.get("user", "unknown")
     db_path = Config.DATABASE_PATH
-    blocklist_service = BlocklistService(db_path=db_path)
-    device_manager = DeviceManager(db_path=db_path)
+    engine = RulesEngine(db_path=db_path)
 
     try:
-        entry = blocklist_service.add_ip(ip_address, user, note)
-        normalized_ip = entry["ip_address"]
-        devices = device_manager.get_all_devices()
+        result = engine.process_block([ip_address], user, note)
 
-        # Push to devices in background thread (use normalized IP)
-        if devices:
-            t = threading.Thread(
-                target=_push_in_background,
-                args=(normalized_ip, devices, "block", db_path),
-                daemon=True,
-            )
-            t.start()
+        if result["errors"]:
+            error_msg = "; ".join(result["errors"])
+            if request.is_json:
+                return jsonify({"success": False, "message": error_msg}), 400
+            flash(error_msg, "error")
+            return redirect(url_for("dashboard.index"))
+
+        added = result["ips_added"]
+        operation_id = result["operation_id"]
+        display_ip = added[0] if added else ip_address
 
         if request.is_json:
             return jsonify({
                 "success": True,
-                "message": f"IP {normalized_ip} added to blocklist. Pushing to {len(devices)} device(s) in background.",
+                "message": f"IP {display_ip} added to blocklist.",
+                "operation_id": operation_id,
             })
-        flash(f"IP {normalized_ip} added to blocklist. Pushing to {len(devices)} device(s) in background.")
+        flash(f"IP {display_ip} added to blocklist.")
     except ValueError as e:
         if request.is_json:
             return jsonify({"success": False, "message": str(e)}), 400
@@ -81,46 +64,73 @@ def add_ip():
     return redirect(url_for("dashboard.index"))
 
 
+@blocklist_bp.route("/blocklist/add-bulk", methods=["POST"])
+@login_required
+def add_bulk():
+    """Add multiple IPs to the blocklist in a single request."""
+    if not request.is_json:
+        return jsonify({"success": False, "message": "JSON request body required."}), 400
+
+    data = request.get_json()
+    ip_addresses = data.get("ip_addresses", [])
+    note = (data.get("note") or "").strip()
+
+    if not isinstance(ip_addresses, list) or not ip_addresses:
+        return jsonify({"success": False, "message": "ip_addresses must be a non-empty list."}), 400
+
+    user = session.get("user", "unknown")
+    db_path = Config.DATABASE_PATH
+    engine = RulesEngine(db_path=db_path)
+
+    try:
+        result = engine.process_block(ip_addresses, user, note)
+
+        if result["errors"]:
+            return jsonify({
+                "success": False,
+                "message": "; ".join(result["errors"]),
+                "errors": result["errors"],
+                "operation_id": result["operation_id"],
+            }), 400
+
+        return jsonify({
+            "success": True,
+            "message": f"{len(result['ips_added'])} IP(s) added to blocklist.",
+            "ips_added": result["ips_added"],
+            "operation_id": result["operation_id"],
+        })
+    except Exception as e:
+        logger.error("Unexpected error in bulk add: %s", e)
+        return jsonify({"success": False, "message": "An unexpected error occurred."}), 500
+
+
 @blocklist_bp.route("/blocklist/remove/<path:ip>", methods=["POST"])
 @login_required
 def remove_ip(ip):
-    """Remove an IP from the blocklist. Device removal happens in background."""
+    """Remove an IP from the blocklist. Removal operations are enqueued asynchronously."""
+    user = session.get("user", "unknown")
     db_path = Config.DATABASE_PATH
-    blocklist_service = BlocklistService(db_path=db_path)
-    device_manager = DeviceManager(db_path=db_path)
+    engine = RulesEngine(db_path=db_path)
 
     try:
-        devices = device_manager.get_all_devices()
+        result = engine.process_unblock([ip], user)
 
-        # Grab block_entry_id before deleting the DB row
-        # so the background thread can still store push statuses
-        block_entry_id = None
-        with get_db(db_path) as conn:
-            row = conn.execute(
-                "SELECT id FROM block_entries WHERE ip_address = ?", (ip,)
-            ).fetchone()
-            if row:
-                block_entry_id = row["id"]
+        if result["errors"]:
+            error_msg = "; ".join(result["errors"])
+            if request.is_json:
+                return jsonify({"success": False, "message": error_msg}), 400
+            flash(error_msg, "error")
+            return redirect(url_for("dashboard.index"))
 
-        # Delete from DB first (deterministic, no race)
-        blocklist_service.remove_ip(ip)
-
-        # Then push removal to devices in background
-        if devices:
-            t = threading.Thread(
-                target=_push_in_background,
-                args=(ip, devices, "remove", db_path),
-                kwargs={"block_entry_id": block_entry_id},
-                daemon=True,
-            )
-            t.start()
+        operation_id = result["operation_id"]
 
         if request.is_json:
             return jsonify({
                 "success": True,
-                "message": f"IP {ip} removed. Cleaning up {len(devices)} device(s) in background.",
+                "message": f"IP {ip} removed from blocklist.",
+                "operation_id": operation_id,
             })
-        flash(f"IP {ip} removed. Cleaning up {len(devices)} device(s) in background.")
+        flash(f"IP {ip} removed from blocklist.")
     except ValueError as e:
         if request.is_json:
             return jsonify({"success": False, "message": str(e)}), 400
@@ -132,3 +142,42 @@ def remove_ip(ip):
         flash("An unexpected error occurred while removing the IP.", "error")
 
     return redirect(url_for("dashboard.index"))
+
+@blocklist_bp.route("/blocklist/remove-bulk", methods=["POST"])
+@login_required
+def remove_bulk():
+    """Remove multiple IPs from the blocklist in a single request."""
+    if not request.is_json:
+        return jsonify({"success": False, "message": "JSON request body required."}), 400
+
+    data = request.get_json()
+    ip_addresses = data.get("ip_addresses", [])
+
+    if not isinstance(ip_addresses, list) or not ip_addresses:
+        return jsonify({"success": False, "message": "ip_addresses must be a non-empty list."}), 400
+
+    user = session.get("user", "unknown")
+    db_path = Config.DATABASE_PATH
+    engine = RulesEngine(db_path=db_path)
+
+    try:
+        result = engine.process_unblock(ip_addresses, user)
+
+        if result["errors"]:
+            return jsonify({
+                "success": False,
+                "message": "; ".join(result["errors"]),
+                "errors": result["errors"],
+                "operation_id": result["operation_id"],
+            }), 400
+
+        return jsonify({
+            "success": True,
+            "message": f"{len(result['ips_removed'])} IP(s) removed from blocklist.",
+            "ips_removed": result["ips_removed"],
+            "operation_id": result["operation_id"],
+        })
+    except Exception as e:
+        logger.error("Unexpected error in bulk remove: %s", e)
+        return jsonify({"success": False, "message": "An unexpected error occurred."}), 500
+

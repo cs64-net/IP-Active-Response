@@ -4,8 +4,10 @@ Interacts with pfSense by submitting forms and parsing HTML responses,
 since the REST API package may not be installed.
 """
 
+import ipaddress
 import logging
 import re
+from html.parser import HTMLParser
 from typing import List, Optional
 
 import requests
@@ -21,7 +23,7 @@ class PfSenseError(Exception):
 class PfSenseClient:
     """Client for interacting with pfSense web interface via HTTP."""
 
-    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False):
+    def __init__(self, host: str, username: str, password: str, verify_ssl: bool = False, block_method: str = "null_route"):
         """Initialize with pfSense web interface credentials.
 
         Args:
@@ -29,6 +31,8 @@ class PfSenseClient:
             username: Web interface username.
             password: Web interface password.
             verify_ssl: Whether to verify SSL certificates.
+            block_method: 'null_route' or 'floating_rule' — determines which
+                          methods add_rules_bulk/remove_rules_bulk delegate to.
         """
         self.host = host.rstrip("/")
         if not self.host.startswith(("http://", "https://")):
@@ -36,6 +40,7 @@ class PfSenseClient:
         self.username = username
         self.password = password
         self.verify_ssl = verify_ssl
+        self.block_method = block_method
         self.session: Optional[requests.Session] = None
         self.csrf_token: Optional[str] = None
 
@@ -131,6 +136,19 @@ class PfSenseClient:
             pass  # Keep existing token if parsing fails
 
     @staticmethod
+    def _get_gateway(ip_or_cidr: str) -> str:
+        """Return the correct null-route gateway for the given IP address.
+
+        Args:
+            ip_or_cidr: IP address or CIDR notation.
+
+        Returns:
+            ``"Null6"`` for IPv6 addresses, ``"Null4"`` for IPv4.
+        """
+        addr = ip_or_cidr.split("/")[0]
+        return "Null6" if isinstance(ipaddress.ip_address(addr), ipaddress.IPv6Address) else "Null4"
+
+    @staticmethod
     def _split_ip_mask(ip_or_cidr: str) -> tuple:
         """Split an IP or CIDR into (address, subnet_mask) for pfSense forms.
 
@@ -138,18 +156,22 @@ class PfSenseClient:
             ip_or_cidr: IP address or CIDR notation (e.g. '10.0.0.1' or '10.0.0.0/24').
 
         Returns:
-            Tuple of (address_str, mask_str). Single IPs get mask '32'.
+            Tuple of (address_str, mask_str). Single IPv4 IPs get mask '32',
+            single IPv6 IPs get mask '128'.
         """
         if "/" in ip_or_cidr:
             parts = ip_or_cidr.split("/", 1)
             return (parts[0], parts[1])
+        addr = ip_or_cidr.split("/")[0]
+        if isinstance(ipaddress.ip_address(addr), ipaddress.IPv6Address):
+            return (ip_or_cidr, "128")
         return (ip_or_cidr, "32")
 
     def _parse_alias_entries(self, html: str) -> tuple:
         """Parse alias address entries and subnet masks from pfSense edit page HTML.
 
-        Handles both attribute orderings (name before value and value before name)
-        and both input and select elements.
+        Uses Python's stdlib HTMLParser for reliable parsing instead of regex,
+        since pfSense's HTML attribute ordering varies across versions.
 
         Args:
             html: HTML content from the alias edit page.
@@ -159,72 +181,86 @@ class PfSenseClient:
                 existing_ips: list of full CIDR strings (e.g. ['10.0.0.0/24', '1.2.3.4/32'])
                 existing_addrs: list of just the address parts (e.g. ['10.0.0.0', '1.2.3.4'])
         """
-        # Find all tags (input/select) and extract name + value from each
-        # This handles any attribute order
-        addr_map = {}  # index -> address value
+        addr_map = {}    # index -> address value
         subnet_map = {}  # index -> subnet mask value
 
-        # Match each HTML tag that contains 'address' in a name attribute
-        for tag_match in re.finditer(r'<(?:input|select)[^>]*>', html, re.IGNORECASE):
-            tag = tag_match.group(0)
+        class _AliasHTMLParser(HTMLParser):
+            """Stateful parser that extracts address inputs and subnet selects."""
 
-            # Extract name attribute
-            name_match = re.search(r'name=["\']([^"\']+)["\']', tag)
-            if not name_match:
-                continue
-            name_val = name_match.group(1)
+            def __init__(self):
+                super().__init__()
+                # Track which <select name="address_subnetN"> we're inside
+                self._in_select = None  # None or index string
 
-            # Extract value attribute (for input elements)
-            value_match = re.search(r'value=["\']([^"\']*)["\']', tag)
+            def handle_starttag(self, tag, attrs):
+                attr_dict = dict(attrs)
 
-            # Check if this is an address field
-            addr_field = re.match(r'^address(\d+)$', name_val)
-            if addr_field and value_match and value_match.group(1):
-                addr_map[addr_field.group(1)] = value_match.group(1)
-                continue
+                if tag == "input":
+                    name = attr_dict.get("name", "")
+                    value = attr_dict.get("value", "")
+                    # Match address0, address1, ... but NOT address_subnet0
+                    if name.startswith("address") and "_" not in name:
+                        idx = name[len("address"):]
+                        if idx.isdigit():
+                            addr_map[idx] = value
 
-            # Check if this is a subnet field
-            subnet_field = re.match(r'^address_subnet(\d+)$', name_val)
-            if subnet_field:
-                # For select elements, look for the selected option value
-                if '<select' in tag.lower() or not value_match:
-                    # Find the selected option after this select tag
-                    tag_end = tag_match.end()
-                    # Look for selected option within the next chunk of HTML
-                    select_chunk = html[tag_end:tag_end + 2000]
-                    selected_match = re.search(
-                        r'<option[^>]*value=["\']([^"\']*)["\'][^>]*selected',
-                        select_chunk,
-                        re.IGNORECASE,
-                    )
-                    if not selected_match:
-                        selected_match = re.search(
-                            r'<option[^>]*selected[^>]*value=["\']([^"\']*)["\']',
-                            select_chunk,
-                            re.IGNORECASE,
-                        )
-                    if selected_match:
-                        subnet_map[subnet_field.group(1)] = selected_match.group(1)
-                elif value_match:
-                    subnet_map[subnet_field.group(1)] = value_match.group(1)
+                elif tag == "select":
+                    name = attr_dict.get("name", "")
+                    if name.startswith("address_subnet"):
+                        idx = name[len("address_subnet"):]
+                        if idx.isdigit():
+                            self._in_select = idx
+
+                elif tag == "option":
+                    if self._in_select is not None:
+                        # Check if this option is selected
+                        is_selected = ("selected" in attr_dict or
+                                       attr_dict.get("selected") == "selected")
+                        if is_selected:
+                            value = attr_dict.get("value", "")
+                            if value.isdigit():
+                                subnet_map[self._in_select] = value
+
+            def handle_endtag(self, tag):
+                if tag == "select":
+                    self._in_select = None
+
+        parser = _AliasHTMLParser()
+        try:
+            parser.feed(html)
+        except Exception:
+            logger.warning("HTML parser encountered an error, falling back to partial results")
 
         # Build full CIDR strings
         existing_ips = []
         existing_addrs = []
         for idx in sorted(addr_map.keys(), key=int):
-            addr = addr_map[idx]
-            mask = subnet_map.get(idx, "32")
+            raw_addr = addr_map[idx]
+
+            # If the address field already contains CIDR (e.g. "10.0.0.0/24"),
+            # extract the mask from it — this is the most reliable source.
+            if "/" in raw_addr:
+                parts = raw_addr.split("/", 1)
+                addr = parts[0]
+                mask = parts[1]
+            else:
+                addr = raw_addr
+                # Use the subnet select value, default to 32
+                mask = subnet_map.get(idx, "32")
+
             existing_ips.append(f"{addr}/{mask}")
             existing_addrs.append(addr)
 
-        logger.debug("Parsed %d alias entries: %s", len(existing_ips), existing_ips)
+        logger.debug("Parsed %d alias entries (addrs=%s, subnets=%s): %s",
+                      len(existing_ips), list(addr_map.keys()),
+                      list(subnet_map.keys()), existing_ips)
         return existing_ips, existing_addrs
+
     def _build_alias_form_data(self, alias_name: str, ips: list, alias_id: str = None) -> dict:
         """Build POST form data for saving a pfSense alias.
 
-        Embeds CIDR notation directly in the address field so pfSense's
-        saveAlias() parses the subnet from the address string itself,
-        avoiding issues where address_subnet POST values are ignored.
+        Sends address and subnet mask as separate form fields, matching
+        how pfSense's own JavaScript submits the alias edit form.
 
         Args:
             alias_name: Name of the alias.
@@ -247,18 +283,16 @@ class PfSenseClient:
             data["id"] = alias_id
 
         for i, ip in enumerate(ips):
-            # Ensure every entry has CIDR notation so pfSense parses
-            # the subnet from the address field directly.
             if "/" not in ip:
                 ip = f"{ip}/32"
             addr, mask = self._split_ip_mask(ip)
-            # Put full CIDR in address field — pfSense splits on "/"
-            data[f"address{i}"] = f"{addr}/{mask}"
+            # Send address and subnet as separate fields — this is how
+            # pfSense's own form JavaScript submits alias entries.
+            data[f"address{i}"] = addr
             data[f"address_subnet{i}"] = mask
             data[f"detail{i}"] = "SOC blocked entry"
 
         return data
-
 
     def add_null_route(self, ip_address: str) -> bool:
         """Add a static route to null for the given IP via the web interface.
@@ -285,10 +319,8 @@ class PfSenseClient:
             self._refresh_csrf(resp.text)
 
             # Check for existing route — handle both plain IPs and CIDR
-            if "/" in ip_address:
-                route_check = ip_address
-            else:
-                route_check = f"{ip_address}/32"
+            addr, mask = self._split_ip_mask(ip_address)
+            route_check = f"{addr}/{mask}"
             if route_check in resp.text:
                 logger.debug("Null route for %s already exists on %s, skipping", ip_address, self.host)
                 return True
@@ -299,15 +331,13 @@ class PfSenseClient:
             resp.raise_for_status()
             self._refresh_csrf(resp.text)
 
-            # Split IP and subnet for the form
-            addr, mask = self._split_ip_mask(ip_address)
-
             # Submit the static route form
+            gateway = self._get_gateway(ip_address)
             route_data = {
                 "__csrf_magic": self.csrf_token,
                 "network": addr,
                 "network_subnet": mask,
-                "gateway": "Null4",
+                "gateway": gateway,
                 "descr": f"SOC IP Blocker - blocked {ip_address}",
                 "disabled": "",
                 "save": "Save",
@@ -364,11 +394,9 @@ class PfSenseClient:
             # Find the route ID for this IP by parsing rows
             route_id = None
             rows = re.split(r'<tr[^>]*>', resp.text)
-            # Handle both plain IPs and CIDR
-            if "/" in ip_address:
-                route_search = ip_address
-            else:
-                route_search = f"{ip_address}/32"
+            # Handle both plain IPs and CIDR — use _split_ip_mask for correct default
+            addr, mask = self._split_ip_mask(ip_address)
+            route_search = f"{addr}/{mask}"
             # Escape dots and slashes for regex word-boundary matching
             route_pattern = re.compile(re.escape(route_search))
             for row in rows:
@@ -426,6 +454,226 @@ class PfSenseClient:
             raise PfSenseError(
                 f"Failed to remove null route for {ip_address} on {self.host}: {e}"
             ) from e
+
+    def add_null_routes_bulk(self, ip_addresses: list) -> dict:
+        """Add multiple null routes in a single session to minimize transactions.
+
+        Reuses the same authenticated session for all route additions and
+        applies changes only once at the end.
+
+        Args:
+            ip_addresses: List of IPv4/IPv6 addresses or CIDRs to null-route.
+
+        Returns:
+            Dict with 'success' (list of IPs added), 'failed' (list of
+            {'ip': str, 'error': str} dicts), and 'skipped' (already existed).
+        """
+        results = {"success": [], "failed": [], "skipped": []}
+        if not ip_addresses:
+            return results
+
+        try:
+            self._ensure_session()
+
+            # Fetch routes page once to check existing routes
+            routes_list_url = self._get_url("/system_routes.php")
+            resp = self.session.get(routes_list_url, timeout=30)
+            resp.raise_for_status()
+            self._refresh_csrf(resp.text)
+            existing_text = resp.text
+
+            added_any = False
+            for ip_address in ip_addresses:
+                try:
+                    # Check if route already exists
+                    check_addr, check_mask = self._split_ip_mask(ip_address)
+                    route_check = f"{check_addr}/{check_mask}"
+                    if route_check in existing_text:
+                        logger.debug(
+                            "Null route for %s already exists on %s, skipping",
+                            ip_address, self.host,
+                        )
+                        results["skipped"].append(ip_address)
+                        continue
+
+                    # GET the edit page for a fresh CSRF token
+                    route_url = self._get_url("/system_routes_edit.php")
+                    resp = self.session.get(route_url, timeout=30)
+                    resp.raise_for_status()
+                    self._refresh_csrf(resp.text)
+
+                    addr, mask = self._split_ip_mask(ip_address)
+                    gateway = self._get_gateway(ip_address)
+
+                    route_data = {
+                        "__csrf_magic": self.csrf_token,
+                        "network": addr,
+                        "network_subnet": mask,
+                        "gateway": gateway,
+                        "descr": f"SOC IP Blocker - blocked {ip_address}",
+                        "disabled": "",
+                        "save": "Save",
+                        "apply": "Apply Changes",
+                    }
+                    resp = self.session.post(route_url, data=route_data, timeout=30)
+                    resp.raise_for_status()
+                    self._refresh_csrf(resp.text)
+
+                    results["success"].append(ip_address)
+                    added_any = True
+                    logger.debug("Added null route for %s on %s", ip_address, self.host)
+
+                except (requests.RequestException, PfSenseError) as e:
+                    results["failed"].append({"ip": ip_address, "error": str(e)})
+                    logger.warning(
+                        "Failed to add null route for %s on %s: %s",
+                        ip_address, self.host, e,
+                    )
+
+            # Apply changes once at the end if any routes were added
+            if added_any:
+                try:
+                    routes_url = self._get_url("/system_routes.php")
+                    resp = self.session.get(routes_url, timeout=30)
+                    resp.raise_for_status()
+                    self._refresh_csrf(resp.text)
+
+                    apply_data = {
+                        "__csrf_magic": self.csrf_token,
+                        "apply": "Apply Changes",
+                    }
+                    resp = self.session.post(routes_url, data=apply_data, timeout=30)
+                    resp.raise_for_status()
+                except requests.RequestException as e:
+                    logger.error("Failed to apply route changes on %s: %s", self.host, e)
+
+            logger.info(
+                "Bulk add null routes on %s: %d added, %d skipped, %d failed",
+                self.host, len(results["success"]),
+                len(results["skipped"]), len(results["failed"]),
+            )
+            return results
+
+        except requests.RequestException as e:
+            raise PfSenseError(
+                f"Failed to bulk add null routes on {self.host}: {e}"
+            ) from e
+
+    def remove_null_routes_bulk(self, ip_addresses: list) -> dict:
+        """Remove multiple null routes in a single session to minimize transactions.
+
+        Reuses the same authenticated session. For each IP, re-fetches the routes
+        page to get current route IDs (since pfSense re-indexes after each deletion),
+        then deletes and applies changes once at the end.
+
+        Args:
+            ip_addresses: List of IPv4/IPv6 addresses or CIDRs to remove.
+
+        Returns:
+            Dict with 'success' (list of IPs removed), 'failed' (list of
+            {'ip': str, 'error': str} dicts), and 'skipped' (not found).
+        """
+        results = {"success": [], "failed": [], "skipped": []}
+        if not ip_addresses:
+            return results
+
+        try:
+            self._ensure_session()
+            routes_url = self._get_url("/system_routes.php")
+
+            removed_any = False
+            for ip_address in ip_addresses:
+                try:
+                    # Use _split_ip_mask for correct default mask
+                    search_addr, search_mask = self._split_ip_mask(ip_address)
+                    route_search = f"{search_addr}/{search_mask}"
+
+                    # Re-fetch routes page each time to get current IDs
+                    resp = self.session.get(routes_url, timeout=30)
+                    resp.raise_for_status()
+                    self._refresh_csrf(resp.text)
+                    rows = re.split(r'<tr[^>]*>', resp.text)
+
+                    route_pattern = re.compile(re.escape(route_search))
+                    route_id = None
+                    for row in rows:
+                        if route_pattern.search(row):
+                            id_match = re.search(r'act=del&amp;id=(\d+)', row)
+                            if not id_match:
+                                id_match = re.search(r'act=del&id=(\d+)', row)
+                            if not id_match:
+                                id_match = re.search(r'data-id=["\'](\d+)["\']', row)
+                            if not id_match:
+                                id_match = re.search(r'name=["\']route(\d+)["\']', row)
+                            if id_match:
+                                route_id = id_match.group(1)
+                                break
+
+                    if route_id is None:
+                        logger.debug(
+                            "Null route for %s not found on %s, skipping",
+                            ip_address, self.host,
+                        )
+                        results["skipped"].append(ip_address)
+                        continue
+
+                    # Delete the route
+                    try:
+                        delete_data = {
+                            "__csrf_magic": self.csrf_token,
+                            "act": "del",
+                            "id": route_id,
+                        }
+                        resp = self.session.post(routes_url, data=delete_data, timeout=30)
+                        resp.raise_for_status()
+                        self._refresh_csrf(resp.text)
+                    except Exception:
+                        delete_url = self._get_url(
+                            f"/system_routes.php?act=del&id={route_id}"
+                        )
+                        resp = self.session.get(delete_url, timeout=30)
+                        resp.raise_for_status()
+                        self._refresh_csrf(resp.text)
+
+                    results["success"].append(ip_address)
+                    removed_any = True
+                    logger.debug("Removed null route for %s on %s", ip_address, self.host)
+
+                except (requests.RequestException, PfSenseError) as e:
+                    results["failed"].append({"ip": ip_address, "error": str(e)})
+                    logger.warning(
+                        "Failed to remove null route for %s on %s: %s",
+                        ip_address, self.host, e,
+                    )
+
+            # Apply changes once at the end if any routes were removed
+            if removed_any:
+                try:
+                    resp = self.session.get(routes_url, timeout=30)
+                    resp.raise_for_status()
+                    self._refresh_csrf(resp.text)
+
+                    apply_data = {
+                        "__csrf_magic": self.csrf_token,
+                        "apply": "Apply Changes",
+                    }
+                    resp = self.session.post(routes_url, data=apply_data, timeout=30)
+                    resp.raise_for_status()
+                except requests.RequestException as e:
+                    logger.error("Failed to apply route changes on %s: %s", self.host, e)
+
+            logger.info(
+                "Bulk remove null routes on %s: %d removed, %d skipped, %d failed",
+                self.host, len(results["success"]),
+                len(results["skipped"]), len(results["failed"]),
+            )
+            return results
+
+        except requests.RequestException as e:
+            raise PfSenseError(
+                f"Failed to bulk remove null routes on {self.host}: {e}"
+            ) from e
+
 
     def ensure_alias_exists(self, alias_name: str, ips: List[str]) -> bool:
         """Create or update a pfSense alias with the given IP list.
@@ -986,3 +1234,180 @@ class PfSenseClient:
             return resp.status_code == 200
         except requests.RequestException:
             return False
+    def get_alias_entries(self, alias_name: str) -> set:
+        """Retrieve current entries from a pfSense alias for reconciliation.
+
+        Navigates to the alias edit page and parses the current IP entries.
+
+        Args:
+            alias_name: Name of the alias to query.
+
+        Returns:
+            Set of IP/CIDR strings currently in the alias.
+
+        Raises:
+            PfSenseError: If the alias is not found or the operation fails.
+        """
+        try:
+            self._ensure_session()
+
+            # Find the alias ID from the aliases list page
+            aliases_url = self._get_url("/firewall_aliases.php")
+            resp = self.session.get(aliases_url, timeout=30)
+            resp.raise_for_status()
+            self._refresh_csrf(resp.text)
+
+            pattern = re.compile(
+                rf'firewall_aliases_edit\.php\?id=(\d+).*?{re.escape(alias_name)}|'
+                rf'{re.escape(alias_name)}.*?firewall_aliases_edit\.php\?id=(\d+)',
+                re.DOTALL,
+            )
+            match = pattern.search(resp.text)
+            if not match:
+                raise PfSenseError(
+                    f"Alias '{alias_name}' not found on {self.host}"
+                )
+
+            alias_id = match.group(1) or match.group(2)
+
+            # Load the alias edit page and parse entries
+            edit_url = self._get_url(f"/firewall_aliases_edit.php?id={alias_id}")
+            resp = self.session.get(edit_url, timeout=30)
+            resp.raise_for_status()
+            self._refresh_csrf(resp.text)
+
+            existing_ips, _ = self._parse_alias_entries(resp.text)
+
+            logger.debug(
+                "Retrieved %d entries from alias '%s' on %s",
+                len(existing_ips), alias_name, self.host,
+            )
+            return set(existing_ips)
+
+        except PfSenseError:
+            raise
+        except requests.RequestException as e:
+            raise PfSenseError(
+                f"Failed to get alias entries for '{alias_name}' on {self.host}: {e}"
+            ) from e
+
+    def get_static_routes(self) -> set:
+        """Retrieve current null/blackhole static routes for reconciliation.
+
+        Navigates to the static routes page and parses routes that use
+        Null4/Null6 gateways (blackhole routes managed by SOC IP Blocker).
+
+        Returns:
+            Set of IP/CIDR strings that have null routes.
+
+        Raises:
+            PfSenseError: If the operation fails.
+        """
+        try:
+            self._ensure_session()
+
+            routes_url = self._get_url("/system_routes.php")
+            resp = self.session.get(routes_url, timeout=30)
+            resp.raise_for_status()
+            self._refresh_csrf(resp.text)
+
+            routes = set()
+            rows = re.split(r'<tr[^>]*>', resp.text)
+            for row in rows:
+                # Only match rows with null gateway (blackhole routes)
+                if not re.search(r'Null[46]', row, re.IGNORECASE):
+                    continue
+                # Extract the network/CIDR from the row
+                # pfSense displays routes as "x.x.x.x/mask" in table cells
+                ip_match = re.search(
+                    r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2})',
+                    row,
+                )
+                if ip_match:
+                    routes.add(ip_match.group(1))
+
+            logger.debug(
+                "Retrieved %d null routes from %s", len(routes), self.host,
+            )
+            return routes
+
+        except requests.RequestException as e:
+            raise PfSenseError(
+                f"Failed to get static routes from {self.host}: {e}"
+            ) from e
+
+    # --- BaseDeviceClient adapter methods ---
+
+    ALIAS_NAME = "soc_blocklist"
+
+    def add_rules_bulk(self, ip_addresses: list) -> dict:
+        """Adapter for BaseDeviceClient interface.
+
+        Routes to alias-based or null-route methods based on self.block_method.
+        """
+        if self.block_method == "floating_rule":
+            return self._add_via_alias(ip_addresses)
+        return self.add_null_routes_bulk(ip_addresses)
+
+    def remove_rules_bulk(self, ip_addresses: list) -> dict:
+        """Adapter for BaseDeviceClient interface.
+
+        Routes to alias-based or null-route methods based on self.block_method.
+        """
+        if self.block_method == "floating_rule":
+            return self._remove_via_alias(ip_addresses)
+        return self.remove_null_routes_bulk(ip_addresses)
+
+    def _add_via_alias(self, ip_addresses: list) -> dict:
+        """Add IPs using the read-merge-write alias approach."""
+        failed = []
+        try:
+            try:
+                current_entries = self.get_alias_entries(self.ALIAS_NAME)
+            except Exception:
+                current_entries = set()
+
+            merged = set(current_entries)
+            current_addrs = {e.split("/")[0] for e in current_entries}
+
+            for ip in ip_addresses:
+                addr = ip.split("/")[0] if "/" in ip else ip
+                if addr not in current_addrs:
+                    merged.add(ip if "/" in ip else f"{ip}/32")
+                    current_addrs.add(addr)
+
+            self.ensure_alias_exists(self.ALIAS_NAME, list(merged))
+            try:
+                self.create_floating_rule(self.ALIAS_NAME)
+            except Exception as exc:
+                logger.warning("Failed to ensure floating rule: %s", exc)
+
+        except Exception:
+            failed = list(ip_addresses)
+
+        return {"success": [ip for ip in ip_addresses if ip not in failed],
+                "failed": failed, "skipped": []}
+
+    def _remove_via_alias(self, ip_addresses: list) -> dict:
+        """Remove IPs using the read-merge-write alias approach."""
+        failed = []
+        try:
+            try:
+                current_entries = self.get_alias_entries(self.ALIAS_NAME)
+            except Exception:
+                current_entries = set()
+
+            remove_addrs = {(ip.split("/")[0] if "/" in ip else ip) for ip in ip_addresses}
+            remaining = [e for e in current_entries
+                         if (e.split("/")[0] if "/" in e else e) not in remove_addrs]
+
+            self.ensure_alias_exists(self.ALIAS_NAME, remaining)
+
+        except Exception:
+            failed = list(ip_addresses)
+
+        return {"success": [ip for ip in ip_addresses if ip not in failed],
+                "failed": failed, "skipped": []}
+
+
+

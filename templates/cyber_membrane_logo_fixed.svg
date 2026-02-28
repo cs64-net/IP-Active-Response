@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 420" role="img" aria-label="Cyber Membrane logo">
+  <defs>
+    <!-- Binary pattern -->
+    <pattern id="binary" width="80" height="50" patternUnits="userSpaceOnUse">
+      <text x="0" y="18" font-size="14" font-family="monospace" fill="rgba(255,255,255,0.05)">10100101</text>
+      <text x="6" y="38" font-size="14" font-family="monospace" fill="rgba(0,240,255,0.05)">01011010</text>
+    </pattern>
+
+    <!-- Glow -->
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Circuit gradient -->
+    <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#00f0ff"/>
+      <stop offset="100%" stop-color="#7a5cff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Shield background -->
+  <path d="M210 30
+           L360 90
+           V190
+           C360 285 290 340 210 380
+           C130 340 60 285 60 190
+           V90 Z"
+        fill="#0b1220"/>
+
+  <!-- Binary overlay -->
+  <path d="M210 30
+           L360 90
+           V190
+           C360 285 290 340 210 380
+           C130 340 60 285 60 190
+           V90 Z"
+        fill="url(#binary)"/>
+
+  <!-- Globe -->
+  <g transform="translate(110,110)">
+    <circle cx="100" cy="100" r="85"
+            fill="rgba(230,237,255,0.06)"
+            stroke="#e6edff"
+            stroke-width="3"/>
+
+    <!-- Latitude -->
+    <ellipse cx="100" cy="100" rx="85" ry="35"
+             fill="none"
+             stroke="rgba(230,237,255,0.4)"
+             stroke-width="2"/>
+    <ellipse cx="100" cy="100" rx="85" ry="60"
+             fill="none"
+             stroke="rgba(230,237,255,0.25)"
+             stroke-width="2"/>
+
+    <!-- Longitude -->
+    <ellipse cx="100" cy="100" rx="35" ry="85"
+             fill="none"
+             stroke="rgba(230,237,255,0.4)"
+             stroke-width="2"/>
+    <ellipse cx="100" cy="100" rx="60" ry="85"
+             fill="none"
+             stroke="rgba(230,237,255,0.25)"
+             stroke-width="2"/>
+
+    <!-- Circuits -->
+    <g stroke="url(#grad)" stroke-width="3" fill="none" stroke-linecap="round" filter="url(#glow)">
+      <path d="M185 90 H220"/>
+      <path d="M185 110 H225"/>
+      <path d="M175 100 H205 V70 H230"/>
+      <path d="M175 115 H200 V150 H225"/>
+    </g>
+
+    <circle cx="220" cy="90" r="4" fill="#00f0ff"/>
+    <circle cx="225" cy="110" r="4" fill="#7a5cff"/>
+    <circle cx="230" cy="70" r="4" fill="#ffffff"/>
+    <circle cx="225" cy="150" r="4" fill="#00f0ff"/>
+
+    <!-- CM Overlay -->
+    <text x="100" y="115"
+          text-anchor="middle"
+          font-size="64"
+          font-weight="700"
+          font-family="Arial, Helvetica, sans-serif"
+          fill="#ffffff"
+          letter-spacing="4">CM</text>
+  </g>
+</svg>

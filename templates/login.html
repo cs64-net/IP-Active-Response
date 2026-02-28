@@ -1,89 +1,314 @@
 {% extends "base.html" %}
 
-{% block title %}Login - SOC IP Blocker{% endblock %}
+{% block title %}Login — Cyber Membrane Suite{% endblock %}
 
 {% block navbar %}{% endblock %}
 
 {% block extra_head %}
 <style>
     body {
-        background: linear-gradient(135deg, #0f1117 0%, #1a1d2e 50%, #0f1117 100%);
+        background: #0a0c12;
         min-height: 100vh;
         display: flex;
         align-items: center;
         justify-content: center;
+        overflow: hidden;
     }
-    .main-content { width: 100%; }
+    .main-content { width: 100%; position: relative; z-index: 1; }
+
+    /* Animated background glow */
+    .login-bg {
+        position: fixed; inset: 0; z-index: 0; pointer-events: none;
+        background:
+            radial-gradient(ellipse 600px 400px at 30% 20%, rgba(99,102,241,0.08), transparent),
+            radial-gradient(ellipse 500px 500px at 70% 80%, rgba(139,92,246,0.06), transparent);
+    }
+
     .login-card {
-        background: rgba(24, 27, 35, 0.85);
-        backdrop-filter: blur(20px);
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 1.25rem;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+        background: rgba(20, 22, 30, 0.9);
+        backdrop-filter: blur(24px);
+        border: 1px solid rgba(99,102,241,0.12);
+        border-radius: 1.5rem;
+        box-shadow:
+            0 24px 80px rgba(0,0,0,0.5),
+            0 0 60px rgba(99,102,241,0.06);
+        max-width: 500px;
+        width: 100%;
+        margin: 0 auto;
     }
-    .login-icon {
-        width: 80px;
-        height: 80px;
-        border-radius: 50%;
-        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+
+    .login-logo {
         display: flex;
-        align-items: center;
         justify-content: center;
-        margin: 0 auto 1.5rem;
-        font-size: 2rem;
-        color: #fff;
-        box-shadow: 0 8px 30px rgba(99, 102, 241, 0.3);
+        margin-bottom: 1.25rem;
     }
+    .login-logo img {
+        filter: drop-shadow(0 6px 24px rgba(99,102,241,0.4));
+    }
+
+    .brand-title {
+        font-size: 1.5rem;
+        font-weight: 700;
+        letter-spacing: -0.5px;
+        background: linear-gradient(135deg, #c7d2fe 0%, #818cf8 50%, #a78bfa 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    .brand-subtitle {
+        font-size: 0.8rem;
+        letter-spacing: 2.5px;
+        text-transform: uppercase;
+        color: rgba(255,255,255,0.85);
+        font-weight: 500;
+    }
+
+    .login-divider {
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(99,102,241,0.2), transparent);
+        margin: 1.25rem 0 1.5rem;
+    }
+
     .form-floating > .form-control {
-        background: rgba(255,255,255,0.04);
-        border: 1px solid rgba(255,255,255,0.1);
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.08);
         border-radius: 0.75rem;
+        color: #e2e8f0;
+        font-size: 0.95rem;
     }
     .form-floating > .form-control:focus {
-        background: rgba(255,255,255,0.06);
+        background: rgba(255,255,255,0.05);
         border-color: #6366f1;
-        box-shadow: 0 0 0 0.2rem rgba(99, 102, 241, 0.2);
+        box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
     }
+    .form-floating > label { color: rgba(255,255,255,0.4); }
+
     .btn-login {
-        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        background: linear-gradient(135deg, #6366f1, #7c3aed);
         border: none;
         border-radius: 0.75rem;
-        padding: 0.75rem;
+        padding: 0.8rem;
         font-weight: 600;
-        letter-spacing: 0.5px;
-        transition: transform 0.15s ease, box-shadow 0.15s ease;
+        font-size: 0.95rem;
+        letter-spacing: 0.3px;
+        transition: all 0.2s ease;
+        position: relative;
+        overflow: hidden;
     }
     .btn-login:hover {
         transform: translateY(-1px);
-        box-shadow: 0 6px 20px rgba(99, 102, 241, 0.35);
+        box-shadow: 0 8px 24px rgba(99,102,241,0.35);
+        background: linear-gradient(135deg, #7c7cf8, #8b5cf6);
     }
+    .btn-login:active { transform: translateY(0); }
+
+    /* Login animation states */
+    @keyframes borderScan {
+        0%   { border-color: rgba(99,102,241,0.12); box-shadow: 0 24px 80px rgba(0,0,0,0.5), 0 0 60px rgba(99,102,241,0.06); }
+        25%  { border-color: rgba(99,102,241,0.5);  box-shadow: 0 24px 80px rgba(0,0,0,0.5), 0 0 40px rgba(99,102,241,0.15); }
+        50%  { border-color: rgba(139,92,246,0.5);   box-shadow: 0 24px 80px rgba(0,0,0,0.5), 0 0 40px rgba(139,92,246,0.15); }
+        75%  { border-color: rgba(99,102,241,0.5);  box-shadow: 0 24px 80px rgba(0,0,0,0.5), 0 0 40px rgba(99,102,241,0.15); }
+        100% { border-color: rgba(16,185,129,0.6);   box-shadow: 0 24px 80px rgba(0,0,0,0.5), 0 0 50px rgba(16,185,129,0.2); }
+    }
+    @keyframes logoGlow {
+        0%   { filter: drop-shadow(0 6px 24px rgba(99,102,241,0.4)); }
+        50%  { filter: drop-shadow(0 6px 30px rgba(139,92,246,0.6)); }
+        100% { filter: drop-shadow(0 6px 30px rgba(16,185,129,0.6)); }
+    }
+    @keyframes cardExit {
+        0%   { opacity: 1; transform: scale(1); }
+        60%  { opacity: 1; transform: scale(1.03); }
+        100% { opacity: 0; transform: scale(1.08) translateY(-10px); }
+    }
+    @keyframes spinnerRotate {
+        to { transform: rotate(360deg); }
+    }
+
+    .login-card.authenticating {
+        animation: borderScan 1.2s ease-in-out forwards;
+        pointer-events: none;
+    }
+    .login-card.authenticating .login-logo img {
+        animation: logoGlow 1.2s ease-in-out forwards;
+    }
+    .login-card.authenticated {
+        animation: cardExit 0.5s ease-in forwards;
+    }
+
+    .btn-login .btn-text { transition: opacity 0.15s; }
+    .btn-login .btn-spinner {
+        display: none;
+        width: 20px; height: 20px;
+        border: 2px solid rgba(255,255,255,0.3);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: spinnerRotate 0.6s linear infinite;
+    }
+    .btn-login.loading .btn-text { opacity: 0; position: absolute; }
+    .btn-login.loading .btn-spinner { display: inline-block; }
+    .btn-login.loading {
+        background: linear-gradient(135deg, #6366f1, #7c3aed);
+        pointer-events: none;
+    }
+    .btn-login.success {
+        background: linear-gradient(135deg, #10b981, #34d399);
+        pointer-events: none;
+    }
+    .btn-login.success .btn-spinner { display: none; }
+    .btn-login.success .btn-text { opacity: 1; position: static; }
+
     .app-footer { display: none; }
+
+    .login-footer {
+        text-align: center;
+        margin-top: 1.5rem;
+        font-size: 0.75rem;
+        color: rgba(255,255,255,0.85);
+        letter-spacing: 0.5px;
+    }
+
+    /* Error shake */
+    @keyframes cardShake {
+        0%, 100% { transform: translateX(0); }
+        15% { transform: translateX(-8px); }
+        30% { transform: translateX(8px); }
+        45% { transform: translateX(-6px); }
+        60% { transform: translateX(6px); }
+        75% { transform: translateX(-3px); }
+        90% { transform: translateX(3px); }
+    }
+    .login-card.shake {
+        animation: cardShake 0.5s ease-in-out;
+        border-color: rgba(239,68,68,0.5) !important;
+        box-shadow: 0 24px 80px rgba(0,0,0,0.5), 0 0 40px rgba(239,68,68,0.15) !important;
+    }
+    .login-error {
+        color: #f87171;
+        font-size: 0.85rem;
+        text-align: center;
+        margin-bottom: 1rem;
+        display: none;
+    }
+    .login-error.visible { display: block; }
 </style>
 {% endblock %}
 
 {% block content %}
+<div class="login-bg"></div>
 <div class="row justify-content-center">
-    <div class="col-11 col-sm-8 col-md-5 col-lg-4 col-xl-3">
+    <div class="col-11 col-sm-9 col-md-7 col-lg-5 col-xl-4">
         <div class="login-card p-4 p-md-5">
-            <div class="login-icon">
-                <i class="bi bi-shield-lock"></i>
+            <div class="login-logo">
+                <img src="{{ url_for('static', filename='logo.svg') }}" alt="Cyber Membrane Suite" width="110" height="110">
             </div>
-            <h4 class="text-center mb-1 fw-bold">SOC IP Blocker</h4>
-            <p class="text-center text-body-secondary mb-4">Sign in to continue</p>
+            <div class="text-center mb-0">
+                <div class="brand-title">IP Active Response</div>
+                <div class="brand-subtitle mt-1">Cyber Membrane Suite</div>
+            </div>
+            <div class="login-divider"></div>
             <form method="POST" action="{{ url_for('auth.login') }}">
                 <div class="form-floating mb-3">
-                    <input type="text" class="form-control" id="username" name="username" placeholder="Username" required>
-                    <label for="username">Username</label>
+                    <input type="text" class="form-control" id="username" name="username" placeholder="Username" required autocomplete="username">
+                    <label for="username"><i class="bi bi-person me-1"></i>Username</label>
                 </div>
                 <div class="form-floating mb-4">
-                    <input type="password" class="form-control" id="password" name="password" placeholder="Password" required>
-                    <label for="password">Password</label>
+                    <input type="password" class="form-control" id="password" name="password" placeholder="Password" required autocomplete="current-password">
+                    <label for="password"><i class="bi bi-lock me-1"></i>Password</label>
                 </div>
-                <button type="submit" class="btn btn-login btn-primary w-100">
-                    <i class="bi bi-box-arrow-in-right me-2"></i>Login
+                <div class="login-error" id="loginError"><i class="bi bi-exclamation-circle me-1"></i><span></span></div>
+                <button type="submit" class="btn btn-login btn-primary w-100" id="loginBtn">
+                    <span class="btn-text">Sign In<i class="bi bi-arrow-right ms-2"></i></span>
+                    <span class="btn-spinner"></span>
                 </button>
             </form>
         </div>
+        <div class="login-footer" id="loginFooter">
+            <i class="bi bi-shield-check me-1"></i>CYBER MEMBRANE SUITE
+            <div style="margin-top:0.35rem;font-size:0.65rem;opacity:0.5;letter-spacing:0.3px;">Created by Jordan I</div>
+        </div>
     </div>
 </div>
+
+<script>
+(function() {
+    var form = document.querySelector('.login-card form');
+    var card = document.querySelector('.login-card');
+    var btn = document.getElementById('loginBtn');
+    var footer = document.getElementById('loginFooter');
+    var errorEl = document.getElementById('loginError');
+
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+
+        // Reset any previous error state
+        errorEl.classList.remove('visible');
+        card.classList.remove('shake');
+        card.style.borderColor = '';
+        card.style.boxShadow = '';
+
+        // Phase 1: Button spinner
+        btn.classList.add('loading');
+
+        // Phase 2: Card border scan
+        setTimeout(function() {
+            card.classList.add('authenticating');
+        }, 200);
+
+        // AJAX login
+        var formData = new FormData(form);
+        fetch(form.action, {
+            method: 'POST',
+            body: formData,
+            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        })
+        .then(function(resp) { return resp.json().then(function(data) { return { ok: resp.ok, data: data }; }); })
+        .then(function(result) {
+            // Wait for scan animation to finish (at least 1.2s from start)
+            var delay = Math.max(0, 1400 - 200);
+            setTimeout(function() {
+                if (result.data.success) {
+                    // Success: show authenticated
+                    btn.classList.remove('loading');
+                    btn.classList.add('success');
+                    btn.querySelector('.btn-text').innerHTML = '<i class="bi bi-check-lg me-1"></i>Authenticated';
+
+                    // Card exit
+                    setTimeout(function() {
+                        card.classList.add('authenticated');
+                        footer.style.transition = 'opacity 0.4s';
+                        footer.style.opacity = '0';
+                    }, 400);
+
+                    // Redirect
+                    setTimeout(function() {
+                        window.location.href = result.data.redirect || '/dashboard';
+                    }, 800);
+                } else {
+                    // Failure: shake and show error
+                    card.classList.remove('authenticating');
+                    btn.classList.remove('loading');
+                    void card.offsetWidth; // force reflow
+                    card.classList.add('shake');
+                    errorEl.querySelector('span').textContent = result.data.message || 'Invalid credentials';
+                    errorEl.classList.add('visible');
+
+                    // Reset shake after animation
+                    setTimeout(function() {
+                        card.classList.remove('shake');
+                    }, 600);
+                }
+            }, delay);
+        })
+        .catch(function() {
+            card.classList.remove('authenticating');
+            btn.classList.remove('loading');
+            void card.offsetWidth;
+            card.classList.add('shake');
+            errorEl.querySelector('span').textContent = 'Connection error. Please try again.';
+            errorEl.classList.add('visible');
+            setTimeout(function() { card.classList.remove('shake'); }, 600);
+        });
+    });
+})();
+</script>
 {% endblock %}

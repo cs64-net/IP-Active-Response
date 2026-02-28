@@ -9,6 +9,8 @@ import paramiko
 
 logger = logging.getLogger(__name__)
 
+BATCH_SIZE = 200
+
 
 class LinuxClientError(Exception):
     """Custom exception for Linux client operations."""
@@ -108,6 +110,38 @@ class LinuxClient:
             err_text = "\n".join(lines).strip()
         return exit_status, out_text, err_text
 
+    @staticmethod
+    def _is_ipv6(ip_str: str) -> bool:
+        """Check if an IP address string is IPv6.
+
+        Args:
+            ip_str: IP address, optionally with CIDR suffix.
+
+        Returns:
+            True if the address is IPv6.
+        """
+        return ":" in ip_str.split("/")[0]
+
+    def _build_batch_cmd(self, ips: list, action: str) -> str:
+        """Build a single shell command string for a batch of route operations.
+
+        Commands are joined with ` ; ` inside a `bash -c` wrapper so that
+        sudo applies to the entire batch and one failure doesn't abort the rest.
+
+        Args:
+            ips: List of IP address strings.
+            action: Either "add" or "del".
+
+        Returns:
+            A bash -c wrapped command string.
+        """
+        cmds = []
+        for ip in ips:
+            prefix = "ip -6" if self._is_ipv6(ip) else "ip"
+            cmds.append(f"{prefix} route {action} blackhole {ip}")
+        inner = " ; ".join(cmds)
+        return f"bash -c '{inner}'"
+
     def _route_exists(self, client: paramiko.SSHClient, ip_address: str) -> bool:
         """Check if a blackhole route already exists for the given IP.
 
@@ -118,7 +152,9 @@ class LinuxClient:
         Returns:
             True if the blackhole route exists.
         """
-        exit_status, out_text, _ = self._run_cmd(client, f"ip route show {ip_address}")
+        exit_status, out_text, _ = self._run_cmd(
+            client, f"{'ip -6' if self._is_ipv6(ip_address) else 'ip'} route show {ip_address}"
+        )
         return "blackhole" in out_text
 
     def add_null_route(self, ip_address: str) -> bool:
@@ -144,7 +180,8 @@ class LinuxClient:
                     logger.debug("Blackhole route for %s already exists on %s, skipping", ip_address, self.host)
                     return True
 
-                exit_status, _, err_output = self._run_cmd(client, f"ip route add blackhole {ip_address}")
+                prefix = "ip -6" if self._is_ipv6(ip_address) else "ip"
+                exit_status, _, err_output = self._run_cmd(client, f"{prefix} route add blackhole {ip_address}")
                 if exit_status != 0 and err_output:
                     # "RTNETLINK answers: File exists" means route already there
                     if "File exists" in err_output:
@@ -187,7 +224,8 @@ class LinuxClient:
                     logger.debug("No blackhole route for %s on %s, nothing to remove", ip_address, self.host)
                     return True
 
-                exit_status, _, err_output = self._run_cmd(client, f"ip route del blackhole {ip_address}")
+                prefix = "ip -6" if self._is_ipv6(ip_address) else "ip"
+                exit_status, _, err_output = self._run_cmd(client, f"{prefix} route del blackhole {ip_address}")
                 if exit_status != 0 and err_output:
                     # "No such process" means route already gone
                     if "No such process" in err_output:
@@ -210,6 +248,9 @@ class LinuxClient:
     def add_null_routes_bulk(self, ip_addresses: list) -> dict:
         """Add blackhole routes for multiple IPs in a single SSH session.
 
+        Processes IPs in batches of BATCH_SIZE, joining commands with `;`
+        so that one failure doesn't abort the rest.
+
         Args:
             ip_addresses: List of IP addresses to block.
 
@@ -223,24 +264,34 @@ class LinuxClient:
         try:
             client = self._get_ssh_client()
             try:
-                for ip in ip_addresses:
+                for i in range(0, len(ip_addresses), BATCH_SIZE):
+                    batch = ip_addresses[i:i + BATCH_SIZE]
+                    batch_cmd = self._build_batch_cmd(batch, "add")
                     try:
-                        if self._route_exists(client, ip):
-                            results["success"].append(ip)
-                            continue
-                        exit_status, _, err_output = self._run_cmd(client, f"ip route add blackhole {ip}")
-                        if exit_status != 0 and err_output and "File exists" not in err_output:
-                            results["failed"].append({"ip": ip, "error": err_output})
-                        else:
-                            results["success"].append(ip)
+                        _, _, err_output = self._run_cmd(client, batch_cmd)
+                        err_lines = [l for l in err_output.splitlines() if l.strip()] if err_output else []
+                        failed_ips = set()
+                        for line in err_lines:
+                            if "File exists" in line:
+                                continue
+                            for ip in batch:
+                                if ip in line:
+                                    failed_ips.add(ip)
+                                    results["failed"].append({"ip": ip, "error": line.strip()})
+                                    break
+                        for ip in batch:
+                            if ip not in failed_ips:
+                                results["success"].append(ip)
                     except Exception as e:
-                        results["failed"].append({"ip": ip, "error": str(e)})
+                        for ip in batch:
+                            results["failed"].append({"ip": ip, "error": str(e)})
             finally:
                 client.close()
         except Exception as e:
-            # Connection failed — all IPs fail
+            # Connection failed — all unprocessed IPs fail
+            processed = set(r for r in results["success"]) | set(f["ip"] for f in results["failed"])
             for ip in ip_addresses:
-                if ip not in [r for r in results["success"]]:
+                if ip not in processed:
                     results["failed"].append({"ip": ip, "error": str(e)})
 
         added = len(results["success"])
@@ -250,6 +301,9 @@ class LinuxClient:
 
     def remove_null_routes_bulk(self, ip_addresses: list) -> dict:
         """Remove blackhole routes for multiple IPs in a single SSH session.
+
+        Processes IPs in batches of BATCH_SIZE, joining commands with `;`
+        so that one failure doesn't abort the rest.
 
         Args:
             ip_addresses: List of IP addresses to unblock.
@@ -264,23 +318,33 @@ class LinuxClient:
         try:
             client = self._get_ssh_client()
             try:
-                for ip in ip_addresses:
+                for i in range(0, len(ip_addresses), BATCH_SIZE):
+                    batch = ip_addresses[i:i + BATCH_SIZE]
+                    batch_cmd = self._build_batch_cmd(batch, "del")
                     try:
-                        if not self._route_exists(client, ip):
-                            results["success"].append(ip)
-                            continue
-                        exit_status, _, err_output = self._run_cmd(client, f"ip route del blackhole {ip}")
-                        if exit_status != 0 and err_output and "No such process" not in err_output:
-                            results["failed"].append({"ip": ip, "error": err_output})
-                        else:
-                            results["success"].append(ip)
+                        _, _, err_output = self._run_cmd(client, batch_cmd)
+                        err_lines = [l for l in err_output.splitlines() if l.strip()] if err_output else []
+                        failed_ips = set()
+                        for line in err_lines:
+                            if "No such process" in line:
+                                continue
+                            for ip in batch:
+                                if ip in line:
+                                    failed_ips.add(ip)
+                                    results["failed"].append({"ip": ip, "error": line.strip()})
+                                    break
+                        for ip in batch:
+                            if ip not in failed_ips:
+                                results["success"].append(ip)
                     except Exception as e:
-                        results["failed"].append({"ip": ip, "error": str(e)})
+                        for ip in batch:
+                            results["failed"].append({"ip": ip, "error": str(e)})
             finally:
                 client.close()
         except Exception as e:
+            processed = set(r for r in results["success"]) | set(f["ip"] for f in results["failed"])
             for ip in ip_addresses:
-                if ip not in [r for r in results["success"]]:
+                if ip not in processed:
                     results["failed"].append({"ip": ip, "error": str(e)})
 
         removed = len(results["success"])
@@ -300,3 +364,59 @@ class LinuxClient:
             return True
         except Exception:
             return False
+    def get_blackhole_routes(self) -> set:
+        """Query current blackhole routes on the device via SSH.
+
+        Runs 'ip route show type blackhole' and parses the output to extract
+        IP addresses/CIDRs.
+
+        Returns:
+            Set of IP address strings currently blackholed on the device.
+
+        Raises:
+            LinuxClientError: If the SSH command fails.
+        """
+        try:
+            client = self._get_ssh_client()
+            try:
+                exit_status, out_text, err_text = self._run_cmd(
+                    client, "ip route show type blackhole"
+                )
+                if exit_status != 0 and err_text:
+                    raise LinuxClientError(
+                        f"Failed to query blackhole routes on {self.host}: {err_text}"
+                    )
+                routes = set()
+                for line in out_text.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # Format: "blackhole <ip/cidr> ..." — second token is the IP/CIDR
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[0] == "blackhole":
+                        routes.add(parts[1])
+                logger.info(
+                    "Retrieved %d blackhole routes from %s", len(routes), self.host
+                )
+                return routes
+            finally:
+                client.close()
+        except LinuxClientError:
+            raise
+        except Exception as e:
+            raise LinuxClientError(
+                f"SSH error querying blackhole routes on {self.host}: {e}"
+            ) from e
+
+    # --- BaseDeviceClient adapter methods ---
+
+    def add_rules_bulk(self, ip_addresses: list) -> dict:
+        """Adapter for BaseDeviceClient interface. Delegates to add_null_routes_bulk."""
+        return self.add_null_routes_bulk(ip_addresses)
+
+    def remove_rules_bulk(self, ip_addresses: list) -> dict:
+        """Adapter for BaseDeviceClient interface. Delegates to remove_null_routes_bulk."""
+        return self.remove_null_routes_bulk(ip_addresses)
+
+
+

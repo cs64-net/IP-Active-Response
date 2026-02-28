@@ -1,0 +1,5 @@
+requests
+paramiko==3.4.0
+PyMySQL
+gitpython
+pytest

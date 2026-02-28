@@ -1,0 +1,13 @@
+.kiro/
+.pytest_cache/
+.vscode/
+tests/
+__pycache__/
+*.pyc
+*.db
+*.log
+.git/
+.gitignore
+Dockerfile
+docker-compose.yml
+README.md

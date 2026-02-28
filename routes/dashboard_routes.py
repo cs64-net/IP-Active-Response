@@ -1,7 +1,6 @@
 """Dashboard routes for SOC IP Blocker."""
 
 import logging
-import threading
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, url_for
 
@@ -33,6 +32,23 @@ def index():
 
     try:
         blocklist = blocklist_service.get_blocklist()
+        # Attach feed_sources to each blocklist entry
+        try:
+            with get_db(db_path) as conn:
+                for entry in blocklist:
+                    row = conn.execute(
+                        """SELECT GROUP_CONCAT(DISTINCT f.name) as feed_sources
+                           FROM feed_entries fe
+                           JOIN feeds f ON f.id = fe.feed_id
+                           WHERE fe.ip_address = ?""",
+                        (entry["ip_address"],)
+                    ).fetchone()
+                    sources = row["feed_sources"] if row and row["feed_sources"] else ""
+                    entry["feed_sources"] = [s.strip() for s in sources.split(",") if s.strip()] if sources else []
+        except Exception as e:
+            logger.error("Error fetching feed sources: %s", e)
+            for entry in blocklist:
+                entry["feed_sources"] = []
     except Exception as e:
         logger.error("Error fetching blocklist: %s", e)
         blocklist = []
@@ -72,6 +88,116 @@ def index():
     )
 
 
+@dashboard_bp.route("/api/dashboard")
+@login_required
+def api_dashboard():
+    """Return dashboard data as JSON for live polling updates."""
+    db_path = Config.DATABASE_PATH
+    blocklist_service = BlocklistService(db_path=db_path)
+    device_manager = DeviceManager(db_path=db_path)
+
+    try:
+        blocklist = blocklist_service.get_blocklist()
+        # Attach feed_sources to each blocklist entry
+        try:
+            with get_db(db_path) as conn:
+                for entry in blocklist:
+                    row = conn.execute(
+                        """SELECT GROUP_CONCAT(DISTINCT f.name) as feed_sources
+                           FROM feed_entries fe
+                           JOIN feeds f ON f.id = fe.feed_id
+                           WHERE fe.ip_address = ?""",
+                        (entry["ip_address"],)
+                    ).fetchone()
+                    sources = row["feed_sources"] if row and row["feed_sources"] else ""
+                    entry["feed_sources"] = [s.strip() for s in sources.split(",") if s.strip()] if sources else []
+        except Exception:
+            for entry in blocklist:
+                entry["feed_sources"] = []
+    except Exception:
+        blocklist = []
+
+    try:
+        devices = device_manager.get_all_devices()
+    except Exception:
+        devices = []
+
+    total_blocked = len(blocklist)
+    total_devices = len(devices)
+    online_count = sum(1 for d in devices if d.get("status") == "online")
+    offline_count = sum(1 for d in devices if d.get("status") == "offline")
+
+    try:
+        with get_db(db_path) as conn:
+            for device in devices:
+                row = conn.execute(
+                    "SELECT COUNT(*) as synced FROM push_statuses WHERE device_id = ? AND status = 'success'",
+                    (device["id"],)
+                ).fetchone()
+                device["synced_count"] = row["synced"] if row else 0
+                device["total_blocked"] = total_blocked
+    except Exception:
+        pass
+
+    # Sanitize devices for JSON (remove credentials)
+    safe_devices = []
+    for d in devices:
+        safe_devices.append({
+            "id": d["id"],
+            "hostname": d["hostname"],
+            "device_type": d["device_type"],
+            "block_method": d.get("block_method", ""),
+            "status": d.get("status", "unknown"),
+            "friendly_name": d.get("friendly_name", ""),
+            "synced_count": d.get("synced_count", 0),
+            "total_blocked": d.get("total_blocked", 0),
+        })
+
+    # Blocklist entries with push statuses
+    blocklist_data = []
+    for entry in blocklist:
+        push_statuses = []
+        for ps in entry.get("push_statuses", []):
+            push_statuses.append({
+                "hostname": ps.get("hostname", ""),
+                "friendly_name": ps.get("friendly_name", ""),
+                "device_type": ps.get("device_type", ""),
+                "status": ps.get("status", ""),
+                "error_message": ps.get("error_message", ""),
+            })
+        blocklist_data.append({
+            "ip_address": entry["ip_address"],
+            "added_by": entry["added_by"],
+            "added_at": entry["added_at"],
+            "note": entry.get("note", ""),
+            "push_statuses": push_statuses,
+            "feed_sources": entry.get("feed_sources", []),
+        })
+
+    return jsonify({
+        "total_blocked": total_blocked,
+        "total_devices": total_devices,
+        "online_count": online_count,
+        "offline_count": offline_count,
+        "devices": safe_devices,
+        "blocklist": blocklist_data,
+    })
+
+@dashboard_bp.route("/api/dashboard/clear-stats", methods=["POST"])
+@login_required
+def clear_stats():
+    """Delete pending, in_progress, and failed push_status records (preserves success records)."""
+    db_path = Config.DATABASE_PATH
+    try:
+        with get_db(db_path) as conn:
+            conn.execute("DELETE FROM push_statuses WHERE status IN ('pending', 'in_progress', 'failed')")
+        return jsonify({"success": True})
+    except Exception as e:
+        logger.error("Error clearing push stats: %s", e)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+
 @dashboard_bp.route("/dashboard/refresh", methods=["POST"])
 @login_required
 def refresh():
@@ -94,11 +220,10 @@ def refresh():
 @dashboard_bp.route("/dashboard/refresh-all", methods=["POST"])
 @login_required
 def refresh_all():
-    """Run health checks on all devices and sync blocklist in background. Returns JSON."""
+    """Run health checks on all devices and queue blocklist sync via operation_queue."""
     db_path = Config.DATABASE_PATH
     monitor = StatusMonitor(db_path=db_path)
     device_manager = DeviceManager(db_path=db_path)
-    blocklist_service = BlocklistService(db_path=db_path)
 
     try:
         # Health checks
@@ -106,58 +231,16 @@ def refresh_all():
         online = sum(1 for s in results.values() if s == "online")
         offline = sum(1 for s in results.values() if s == "offline")
 
-        # Sync blocklist in background for online devices
+        # Queue sync for online devices via operation_queue
         devices = device_manager.get_all_devices()
         online_devices = [d for d in devices if results.get(d["id"]) == "online"]
-        blocklist = blocklist_service.get_blocklist()
-        blocked_ips = [entry["ip_address"] for entry in blocklist]
 
-        if blocked_ips and online_devices:
-            def _bg_sync():
-                from services.push_engine import PushEngine
-                from clients.pfsense_client import PfSenseClient
-                ALIAS_NAME = "soc_blocklist"
-                for device in online_devices:
-                    try:
-                        if device["device_type"] == "pfsense" and device.get("block_method") == "floating_rule":
-                            client = PfSenseClient(
-                                host=device["hostname"],
-                                username=device.get("web_username", ""),
-                                password=device.get("web_password", ""),
-                            )
-                            client.ensure_alias_exists(ALIAS_NAME, blocked_ips)
-                            # Write push_statuses
-                            with get_db(db_path) as conn:
-                                for ip in blocked_ips:
-                                    block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (ip,)).fetchone()
-                                    if block_entry:
-                                        conn.execute(
-                                            """INSERT OR REPLACE INTO push_statuses
-                                               (block_entry_id, device_id, status, error_message, pushed_at)
-                                               VALUES (?, ?, 'success', NULL, CURRENT_TIMESTAMP)""",
-                                            (block_entry["id"], device["id"])
-                                        )
-                        else:
-                            engine = PushEngine(db_path=db_path)
-                            for ip in blocked_ips:
-                                result = engine._push_to_device(ip, device, "block")
-                                with get_db(db_path) as conn:
-                                    block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (ip,)).fetchone()
-                                    if block_entry:
-                                        status = "success" if result["success"] else "failed"
-                                        conn.execute(
-                                            """INSERT OR REPLACE INTO push_statuses
-                                               (block_entry_id, device_id, status, error_message, pushed_at)
-                                               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)""",
-                                            (block_entry["id"], device["id"], status, result.get("error_message"))
-                                        )
-                    except Exception as e:
-                        logger.error("Dashboard refresh-all sync failed for %s: %s", device["hostname"], e)
+        from services.rules_engine import RulesEngine
+        engine = RulesEngine(db_path=db_path)
+        for device in online_devices:
+            engine.onboard_device(device["id"])
 
-            t = threading.Thread(target=_bg_sync, daemon=True)
-            t.start()
-
-        sync_msg = f" Syncing {len(blocked_ips)} IP(s) to {len(online_devices)} device(s)." if blocked_ips and online_devices else ""
+        sync_msg = f" Sync queued for {len(online_devices)} device(s)." if online_devices else ""
         return jsonify({
             "success": True,
             "message": f"Health check: {online} online, {offline} offline.{sync_msg}",

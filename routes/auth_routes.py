@@ -4,14 +4,33 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 
 from auth import login_required, verify_password
 from database import get_db
+from rate_limiter import RateLimiter
 
 auth_bp = Blueprint("auth", __name__)
+
+# 5 login attempts per 60-second window per IP — no lockout, just throttle
+_login_limiter = RateLimiter(max_attempts=5, window_seconds=60)
 
 
 @auth_bp.route("/login", methods=["GET", "POST"])
 def login():
     """Handle login page display (GET) and credential validation (POST)."""
     if request.method == "POST":
+        client_ip = request.remote_addr or "unknown"
+        is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+        # Rate limit check — no lockout, just slow down
+        if _login_limiter.is_rate_limited(client_ip):
+            retry = _login_limiter.retry_after(client_ip)
+            if is_ajax:
+                return jsonify({
+                    "success": False,
+                    "message": f"Too many login attempts. Try again in {retry}s.",
+                    "retry_after": retry,
+                }), 429
+            flash("Too many login attempts. Please wait a moment.")
+            return redirect(url_for("auth.login"))
+
         username = request.form.get("username", "")
         password = request.form.get("password", "")
 
@@ -23,8 +42,18 @@ def login():
 
         if user and verify_password(user["password_hash"], password):
             session["user"] = user["username"]
+            if is_ajax:
+                return jsonify({"success": True, "redirect": url_for("dashboard.index")})
             return redirect(url_for("dashboard.index"))
         else:
+            _login_limiter.record_attempt(client_ip)
+            if is_ajax:
+                remaining = _login_limiter.remaining(client_ip)
+                return jsonify({
+                    "success": False,
+                    "message": "Invalid username or password.",
+                    "remaining_attempts": remaining,
+                }), 401
             flash("Invalid username or password.")
             return redirect(url_for("auth.login"))
 

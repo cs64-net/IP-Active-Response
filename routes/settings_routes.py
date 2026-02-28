@@ -10,6 +10,7 @@ from config import Config
 from database import get_db
 from services.blocklist_service import BlocklistService
 from services.device_manager import DeviceManager
+from services.rules_engine import RulesEngine
 from services.status_monitor import StatusMonitor
 from clients.pfsense_client import PfSenseClient
 
@@ -33,15 +34,29 @@ def index():
         logger.error("Error fetching devices: %s", e)
         devices = []
 
+    defaults = {
+        "monitor_interval": 300,
+        "default_block_method": "null_route",
+        "protected_ranges": "",
+        "concurrency_limit": 10,
+        "max_retry_attempts": 3,
+        "retry_backoff_base": 30,
+        "reconciliation_interval": 900,
+        "audit_retention_days": 90,
+    }
+
     try:
         with get_db(db_path) as conn:
             row = conn.execute(
-                "SELECT monitor_interval, default_block_method, protected_ranges FROM app_settings WHERE id = 1"
+                "SELECT monitor_interval, default_block_method, protected_ranges, "
+                "concurrency_limit, max_retry_attempts, retry_backoff_base, "
+                "reconciliation_interval, audit_retention_days "
+                "FROM app_settings WHERE id = 1"
             ).fetchone()
-            settings = dict(row) if row else {"monitor_interval": 300, "default_block_method": "null_route", "protected_ranges": ""}
+            settings = dict(row) if row else defaults
     except Exception as e:
         logger.error("Error fetching app settings: %s", e)
-        settings = {"monitor_interval": 300, "default_block_method": "null_route", "protected_ranges": ""}
+        settings = defaults
 
     return render_template("settings.html", devices=devices, settings=settings)
 
@@ -49,7 +64,7 @@ def index():
 @settings_bp.route("/settings/update", methods=["POST"])
 @login_required
 def update():
-    """Validate and save app settings (monitor interval)."""
+    """Validate and save app settings (monitor interval and engine config)."""
     db_path = Config.DATABASE_PATH
 
     monitor_interval = request.form.get("monitor_interval", "").strip()
@@ -63,11 +78,39 @@ def update():
         flash("Monitor interval must be a positive integer.", "error")
         return redirect(url_for("settings.index"))
 
+    # Collect engine config fields from form (optional)
+    ENGINE_FIELDS = {
+        "concurrency_limit": ("must be an integer between 1 and 50", lambda v: 1 <= v <= 50),
+        "max_retry_attempts": ("must be a positive integer", lambda v: v > 0),
+        "retry_backoff_base": ("must be a positive integer", lambda v: v > 0),
+        "reconciliation_interval": ("must be an integer >= 60", lambda v: v >= 60),
+        "audit_retention_days": ("must be a positive integer", lambda v: v > 0),
+    }
+
+    engine_updates = {}
+    for field, (msg, validator) in ENGINE_FIELDS.items():
+        raw = request.form.get(field, "").strip()
+        if raw:
+            try:
+                val = int(raw)
+                if not validator(val):
+                    raise ValueError()
+                engine_updates[field] = val
+            except (ValueError, TypeError):
+                flash(f"{field} {msg}.", "error")
+                return redirect(url_for("settings.index"))
+
     try:
+        set_parts = ["monitor_interval = ?"]
+        values = [interval_val]
+        for field, val in engine_updates.items():
+            set_parts.append(f"{field} = ?")
+            values.append(val)
+
         with get_db(db_path) as conn:
             conn.execute(
-                "UPDATE app_settings SET monitor_interval = ? WHERE id = 1",
-                (interval_val,),
+                f"UPDATE app_settings SET {', '.join(set_parts)} WHERE id = 1",
+                tuple(values),
             )
         flash("Settings updated successfully.")
     except Exception as e:
@@ -75,6 +118,80 @@ def update():
         flash("An unexpected error occurred while saving settings.", "error")
 
     return redirect(url_for("settings.index"))
+
+@settings_bp.route("/settings/engine-config")
+@login_required
+def get_engine_config():
+    """Return current engine configuration as JSON."""
+    db_path = Config.DATABASE_PATH
+    try:
+        with get_db(db_path) as conn:
+            row = conn.execute(
+                "SELECT concurrency_limit, max_retry_attempts, retry_backoff_base, "
+                "reconciliation_interval, audit_retention_days FROM app_settings WHERE id = 1"
+            ).fetchone()
+            if row:
+                config = dict(row)
+            else:
+                config = {
+                    "concurrency_limit": 10,
+                    "max_retry_attempts": 3,
+                    "retry_backoff_base": 30,
+                    "reconciliation_interval": 900,
+                    "audit_retention_days": 90,
+                }
+        return jsonify({"success": True, "config": config})
+    except Exception as e:
+        logger.error("Error fetching engine config: %s", e)
+        return jsonify({"success": False, "message": "Failed to fetch engine configuration."}), 500
+
+
+@settings_bp.route("/settings/engine-config", methods=["POST"])
+@login_required
+def update_engine_config():
+    """Validate and save engine configuration settings."""
+    db_path = Config.DATABASE_PATH
+    data = request.get_json(silent=True) or {}
+
+    FIELD_RULES = {
+        "concurrency_limit": ("must be an integer between 1 and 50", lambda v: isinstance(v, int) and 1 <= v <= 50),
+        "max_retry_attempts": ("must be an integer greater than 0", lambda v: isinstance(v, int) and v > 0),
+        "retry_backoff_base": ("must be an integer greater than 0", lambda v: isinstance(v, int) and v > 0),
+        "reconciliation_interval": ("must be an integer >= 60", lambda v: isinstance(v, int) and v >= 60),
+        "audit_retention_days": ("must be an integer greater than 0", lambda v: isinstance(v, int) and v > 0),
+    }
+
+    errors = []
+    updates = {}
+
+    for field, (msg, validator) in FIELD_RULES.items():
+        if field in data:
+            value = data[field]
+            # Reject booleans (bool is subclass of int in Python)
+            if isinstance(value, bool) or not validator(value):
+                errors.append(f"{field} {msg}")
+            else:
+                updates[field] = value
+
+    if errors:
+        return jsonify({"success": False, "errors": errors}), 400
+
+    if not updates:
+        return jsonify({"success": True, "message": "No fields to update."})
+
+    try:
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values())
+        with get_db(db_path) as conn:
+            conn.execute(
+                f"UPDATE app_settings SET {set_clause} WHERE id = 1",
+                values,
+            )
+        return jsonify({"success": True, "message": "Engine configuration updated."})
+    except Exception as e:
+        logger.error("Error saving engine config: %s", e)
+        return jsonify({"success": False, "message": "Failed to save engine configuration."}), 500
+
 
 
 @settings_bp.route("/settings/protected-ranges")
@@ -214,10 +331,9 @@ def create_floating_rule(device_id):
 @settings_bp.route("/settings/sync/<int:device_id>", methods=["POST"])
 @login_required
 def sync_device(device_id):
-    """Sync all current blocked IPs to a device. Useful for newly added firewalls."""
+    """Sync all current blocked IPs to a device via operation_queue."""
     db_path = Config.DATABASE_PATH
     device_manager = DeviceManager(db_path=db_path)
-    blocklist_service = BlocklistService(db_path=db_path)
 
     try:
         devices = device_manager.get_all_devices()
@@ -226,93 +342,13 @@ def sync_device(device_id):
         if device is None:
             return jsonify({"success": False, "message": f"Device {device_id} not found."}), 404
 
-        blocklist = blocklist_service.get_blocklist()
-        blocked_ips = [entry["ip_address"] for entry in blocklist]
-
-        if not blocked_ips:
-            return jsonify({"success": True, "message": "Blocklist is empty — nothing to sync."})
-
-        def _sync_worker():
-            try:
-                if device["device_type"] == "pfsense" and device.get("block_method") == "floating_rule":
-                    # For alias-based blocking, replace the entire alias (idempotent)
-                    client = PfSenseClient(
-                        host=device["hostname"],
-                        username=device.get("web_username", ""),
-                        password=device.get("web_password", ""),
-                    )
-                    client.ensure_alias_exists(ALIAS_NAME, blocked_ips)
-                    logger.info("Sync complete: replaced alias with %d IPs on %s", len(blocked_ips), device["hostname"])
-                    # Update push statuses for alias sync
-                    with get_db(db_path) as conn:
-                        for ip in blocked_ips:
-                            block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (ip,)).fetchone()
-                            if block_entry:
-                                conn.execute(
-                                    """INSERT OR REPLACE INTO push_statuses
-                                       (block_entry_id, device_id, status, error_message, pushed_at)
-                                       VALUES (?, ?, 'success', NULL, CURRENT_TIMESTAMP)""",
-                                    (block_entry["id"], device["id"])
-                                )
-                elif device["device_type"] == "linux":
-                    # Use bulk operation for Linux devices (single SSH session)
-                    from clients.linux_client import LinuxClient
-                    client = LinuxClient(
-                        host=device["hostname"],
-                        port=device.get("ssh_port", 22),
-                        username=device.get("ssh_username", ""),
-                        password=device.get("ssh_password"),
-                        key_path=device.get("ssh_key_path"),
-                        key_content=device.get("ssh_key"),
-                        sudo_password=device.get("sudo_password"),
-                    )
-                    bulk_result = client.add_null_routes_bulk(blocked_ips)
-                    with get_db(db_path) as conn:
-                        for ip in bulk_result["success"]:
-                            block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (ip,)).fetchone()
-                            if block_entry:
-                                conn.execute(
-                                    """INSERT OR REPLACE INTO push_statuses
-                                       (block_entry_id, device_id, status, error_message, pushed_at)
-                                       VALUES (?, ?, 'success', NULL, CURRENT_TIMESTAMP)""",
-                                    (block_entry["id"], device["id"])
-                                )
-                        for fail in bulk_result["failed"]:
-                            block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (fail["ip"],)).fetchone()
-                            if block_entry:
-                                conn.execute(
-                                    """INSERT OR REPLACE INTO push_statuses
-                                       (block_entry_id, device_id, status, error_message, pushed_at)
-                                       VALUES (?, ?, 'failed', ?, CURRENT_TIMESTAMP)""",
-                                    (block_entry["id"], device["id"], fail["error"])
-                                )
-                    logger.info("Sync complete: pushed %d IPs to %s", len(blocked_ips), device["hostname"])
-                else:
-                    # For pfSense null_route, push per-IP
-                    from services.push_engine import PushEngine
-                    engine = PushEngine(db_path=db_path)
-                    for ip in blocked_ips:
-                        result = engine._push_to_device(ip, device, "block")
-                        with get_db(db_path) as conn:
-                            block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (ip,)).fetchone()
-                            if block_entry:
-                                status = "success" if result["success"] else "failed"
-                                conn.execute(
-                                    """INSERT OR REPLACE INTO push_statuses
-                                       (block_entry_id, device_id, status, error_message, pushed_at)
-                                       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)""",
-                                    (block_entry["id"], device["id"], status, result.get("error_message"))
-                                )
-                    logger.info("Sync complete: pushed %d IPs to %s", len(blocked_ips), device["hostname"])
-            except Exception as e:
-                logger.error("Sync failed for device %s: %s", device_id, e)
-
-        t = threading.Thread(target=_sync_worker, daemon=True)
-        t.start()
+        engine = RulesEngine(db_path=db_path)
+        operation_id = engine.onboard_device(device_id)
 
         return jsonify({
             "success": True,
-            "message": f"Syncing {len(blocked_ips)} IP(s) to {device['hostname']} in background.",
+            "message": f"Sync queued for {device['hostname']}. Check Operations Log for progress.",
+            "operation_id": operation_id,
         })
     except Exception as e:
         logger.error("Error syncing device %s: %s", device_id, e)
@@ -322,21 +358,17 @@ def sync_device(device_id):
 @settings_bp.route("/settings/refresh-all", methods=["POST"])
 @login_required
 def refresh_all():
-    """Health check + sync blocklist for all devices. Returns JSON summary."""
+    """Health check + queue blocklist sync for all online devices via operation_queue."""
     db_path = Config.DATABASE_PATH
     device_manager = DeviceManager(db_path=db_path)
     monitor = StatusMonitor(db_path=db_path)
-    blocklist_service = BlocklistService(db_path=db_path)
 
     try:
         devices = device_manager.get_all_devices()
         if not devices:
             return jsonify({"success": True, "message": "No devices registered.", "results": []})
 
-        blocklist = blocklist_service.get_blocklist()
-        blocked_ips = [entry["ip_address"] for entry in blocklist]
-
-        # Health check all devices first
+        # Health check all devices
         health_results = {}
         for device in devices:
             status = monitor.check_device(device)
@@ -349,96 +381,22 @@ def refresh_all():
                     (status, now, device["id"]),
                 )
 
-        # Sync blocklist in background for online devices
+        # Queue sync for online devices via operation_queue
         online_devices = [d for d in devices if health_results.get(d["id"]) == "online"]
-
-        def _bg_sync():
-            for device in online_devices:
-                try:
-                    if device["device_type"] == "pfsense" and device.get("block_method") == "floating_rule":
-                        client = PfSenseClient(
-                            host=device["hostname"],
-                            username=device.get("web_username", ""),
-                            password=device.get("web_password", ""),
-                        )
-                        client.ensure_alias_exists(ALIAS_NAME, blocked_ips)
-                        # Write push_statuses
-                        with get_db(db_path) as conn:
-                            for ip in blocked_ips:
-                                block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (ip,)).fetchone()
-                                if block_entry:
-                                    conn.execute(
-                                        """INSERT OR REPLACE INTO push_statuses
-                                           (block_entry_id, device_id, status, error_message, pushed_at)
-                                           VALUES (?, ?, 'success', NULL, CURRENT_TIMESTAMP)""",
-                                        (block_entry["id"], device["id"])
-                                    )
-                    elif device["device_type"] == "linux":
-                        # Use bulk operation for Linux devices (single SSH session)
-                        from clients.linux_client import LinuxClient
-                        client = LinuxClient(
-                            host=device["hostname"],
-                            port=device.get("ssh_port", 22),
-                            username=device.get("ssh_username", ""),
-                            password=device.get("ssh_password"),
-                            key_path=device.get("ssh_key_path"),
-                            key_content=device.get("ssh_key"),
-                            sudo_password=device.get("sudo_password"),
-                        )
-                        bulk_result = client.add_null_routes_bulk(blocked_ips)
-                        with get_db(db_path) as conn:
-                            for ip in bulk_result["success"]:
-                                block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (ip,)).fetchone()
-                                if block_entry:
-                                    conn.execute(
-                                        """INSERT OR REPLACE INTO push_statuses
-                                           (block_entry_id, device_id, status, error_message, pushed_at)
-                                           VALUES (?, ?, 'success', NULL, CURRENT_TIMESTAMP)""",
-                                        (block_entry["id"], device["id"])
-                                    )
-                            for fail in bulk_result["failed"]:
-                                block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (fail["ip"],)).fetchone()
-                                if block_entry:
-                                    conn.execute(
-                                        """INSERT OR REPLACE INTO push_statuses
-                                           (block_entry_id, device_id, status, error_message, pushed_at)
-                                           VALUES (?, ?, 'failed', ?, CURRENT_TIMESTAMP)""",
-                                        (block_entry["id"], device["id"], fail["error"])
-                                    )
-                    else:
-                        # For pfSense null_route, push per-IP
-                        from services.push_engine import PushEngine
-                        engine = PushEngine(db_path=db_path)
-                        for ip in blocked_ips:
-                            result = engine._push_to_device(ip, device, "block")
-                            with get_db(db_path) as conn:
-                                block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (ip,)).fetchone()
-                                if block_entry:
-                                    status = "success" if result["success"] else "failed"
-                                    conn.execute(
-                                        """INSERT OR REPLACE INTO push_statuses
-                                           (block_entry_id, device_id, status, error_message, pushed_at)
-                                           VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)""",
-                                        (block_entry["id"], device["id"], status, result.get("error_message"))
-                                    )
-                    logger.info("Refresh-all sync complete for %s", device["hostname"])
-                except Exception as e:
-                    logger.error("Refresh-all sync failed for %s: %s", device["hostname"], e)
-
-        if blocked_ips and online_devices:
-            t = threading.Thread(target=_bg_sync, daemon=True)
-            t.start()
+        engine = RulesEngine(db_path=db_path)
+        for device in online_devices:
+            engine.onboard_device(device["id"])
 
         online = sum(1 for s in health_results.values() if s == "online")
         offline = sum(1 for s in health_results.values() if s == "offline")
-        sync_msg = f" Syncing {len(blocked_ips)} IP(s) to {len(online_devices)} online device(s)." if blocked_ips and online_devices else ""
+        sync_msg = f" Sync queued for {len(online_devices)} online device(s)." if online_devices else ""
 
         return jsonify({
             "success": True,
             "message": f"Health check: {online} online, {offline} offline.{sync_msg}",
             "online": online,
             "offline": offline,
-            "syncing": len(online_devices) if blocked_ips else 0,
+            "syncing": len(online_devices),
         })
     except Exception as e:
         logger.error("Error in refresh-all: %s", e)
@@ -496,89 +454,12 @@ def setup_device(device_id):
             except Exception as e:
                 steps.append({"step": "Floating Rules", "success": False, "message": str(e)})
 
-        # Step 3: Sync blocklist
+        # Step 3: Sync blocklist via operation_queue
         if sync_blocklist:
             try:
-                blocklist = blocklist_service.get_blocklist()
-                blocked_ips = [entry["ip_address"] for entry in blocklist]
-                if blocked_ips:
-                    def _setup_sync():
-                        try:
-                            if device["device_type"] == "pfsense" and device.get("block_method") == "floating_rule":
-                                client = PfSenseClient(
-                                    host=device["hostname"],
-                                    username=device.get("web_username", ""),
-                                    password=device.get("web_password", ""),
-                                )
-                                client.ensure_alias_exists(ALIAS_NAME, blocked_ips)
-                                # Write push_statuses for all synced IPs
-                                with get_db(db_path) as conn:
-                                    for ip in blocked_ips:
-                                        block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (ip,)).fetchone()
-                                        if block_entry:
-                                            conn.execute(
-                                                """INSERT OR REPLACE INTO push_statuses
-                                                   (block_entry_id, device_id, status, error_message, pushed_at)
-                                                   VALUES (?, ?, 'success', NULL, CURRENT_TIMESTAMP)""",
-                                                (block_entry["id"], device["id"])
-                                            )
-                            elif device["device_type"] == "linux":
-                                # Use bulk operation for Linux devices (single SSH session)
-                                from clients.linux_client import LinuxClient
-                                client = LinuxClient(
-                                    host=device["hostname"],
-                                    port=device.get("ssh_port", 22),
-                                    username=device.get("ssh_username", ""),
-                                    password=device.get("ssh_password"),
-                                    key_path=device.get("ssh_key_path"),
-                                    key_content=device.get("ssh_key"),
-                                    sudo_password=device.get("sudo_password"),
-                                )
-                                bulk_result = client.add_null_routes_bulk(blocked_ips)
-                                with get_db(db_path) as conn:
-                                    for ip in bulk_result["success"]:
-                                        block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (ip,)).fetchone()
-                                        if block_entry:
-                                            conn.execute(
-                                                """INSERT OR REPLACE INTO push_statuses
-                                                   (block_entry_id, device_id, status, error_message, pushed_at)
-                                                   VALUES (?, ?, 'success', NULL, CURRENT_TIMESTAMP)""",
-                                                (block_entry["id"], device["id"])
-                                            )
-                                    for fail in bulk_result["failed"]:
-                                        block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (fail["ip"],)).fetchone()
-                                        if block_entry:
-                                            conn.execute(
-                                                """INSERT OR REPLACE INTO push_statuses
-                                                   (block_entry_id, device_id, status, error_message, pushed_at)
-                                                   VALUES (?, ?, 'failed', ?, CURRENT_TIMESTAMP)""",
-                                                (block_entry["id"], device["id"], fail["error"])
-                                            )
-                            else:
-                                # For pfSense null_route, push per-IP
-                                from services.push_engine import PushEngine
-                                engine = PushEngine(db_path=db_path)
-                                for ip in blocked_ips:
-                                    result = engine._push_to_device(ip, device, "block")
-                                    with get_db(db_path) as conn:
-                                        block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (ip,)).fetchone()
-                                        if block_entry:
-                                            status = "success" if result["success"] else "failed"
-                                            conn.execute(
-                                                """INSERT OR REPLACE INTO push_statuses
-                                                   (block_entry_id, device_id, status, error_message, pushed_at)
-                                                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)""",
-                                                (block_entry["id"], device["id"], status, result.get("error_message"))
-                                            )
-                            logger.info("Setup sync complete for device %s", device_id)
-                        except Exception as e:
-                            logger.error("Setup sync failed for device %s: %s", device_id, e)
-
-                    t = threading.Thread(target=_setup_sync, daemon=True)
-                    t.start()
-                    steps.append({"step": "Blocklist Sync", "success": True, "message": f"Syncing {len(blocked_ips)} IP(s) in background."})
-                else:
-                    steps.append({"step": "Blocklist Sync", "success": True, "message": "Blocklist empty, nothing to sync."})
+                engine = RulesEngine(db_path=db_path)
+                operation_id = engine.onboard_device(device_id)
+                steps.append({"step": "Blocklist Sync", "success": True, "message": f"Sync queued (operation {operation_id[:8]}...). Check Operations Log."})
             except Exception as e:
                 steps.append({"step": "Blocklist Sync", "success": False, "message": str(e)})
 
@@ -652,29 +533,11 @@ def switch_block_method(device_id):
             else:
                 steps.append({"step": "skip_cleanup", "success": True, "message": "Old floating rules and alias left in place."})
 
-            # Add null routes for all blocked IPs
+            # Queue null route sync via operation_queue
             if blocked_ips:
-                def _switch_to_null():
-                    for ip in blocked_ips:
-                        try:
-                            client.add_null_route(ip)
-                        except Exception as e:
-                            logger.error("Failed to add null route for %s: %s", ip, e)
-                    # Update push statuses
-                    with get_db(db_path) as conn:
-                        for ip in blocked_ips:
-                            block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (ip,)).fetchone()
-                            if block_entry:
-                                conn.execute(
-                                    """INSERT OR REPLACE INTO push_statuses
-                                       (block_entry_id, device_id, status, error_message, pushed_at)
-                                       VALUES (?, ?, 'success', NULL, CURRENT_TIMESTAMP)""",
-                                    (block_entry["id"], device["id"])
-                                )
-
-                t = threading.Thread(target=_switch_to_null, daemon=True)
-                t.start()
-                steps.append({"step": "create_null_routes", "success": True, "message": f"Creating {len(blocked_ips)} null route(s) in background."})
+                engine = RulesEngine(db_path=db_path)
+                operation_id = engine.onboard_device(device_id)
+                steps.append({"step": "create_null_routes", "success": True, "message": f"Sync queued for {len(blocked_ips)} IP(s). Check Operations Log."})
 
         elif old_method == "null_route" and new_method == "floating_rule":
             if cleanup_old and blocked_ips:
@@ -701,18 +564,10 @@ def switch_block_method(device_id):
             except Exception as e:
                 steps.append({"step": "create_floating_rules", "success": False, "message": str(e)})
 
-            # Update push statuses
+            # Queue sync via operation_queue
             if blocked_ips:
-                with get_db(db_path) as conn:
-                    for ip in blocked_ips:
-                        block_entry = conn.execute("SELECT id FROM block_entries WHERE ip_address = ?", (ip,)).fetchone()
-                        if block_entry:
-                            conn.execute(
-                                """INSERT OR REPLACE INTO push_statuses
-                                   (block_entry_id, device_id, status, error_message, pushed_at)
-                                   VALUES (?, ?, 'success', NULL, CURRENT_TIMESTAMP)""",
-                                (block_entry["id"], device["id"])
-                            )
+                engine = RulesEngine(db_path=db_path)
+                engine.onboard_device(device_id)
 
         # Update the device's block_method in DB
         with get_db(db_path) as conn:

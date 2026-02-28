@@ -1,0 +1,369 @@
+{% extends "base.html" %}
+{% block title %}Operations Log — IP Active Response{% endblock %}
+
+{% block extra_head %}
+<style>
+    .ops-card {
+        border-radius: 1rem;
+        border: 1px solid rgba(255,255,255,0.06);
+        overflow: hidden;
+    }
+    .ops-card .card-header {
+        background: rgba(255,255,255,0.03);
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+        padding: 1rem 1.25rem;
+    }
+    .summary-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.35rem 0.75rem;
+        border-radius: 2rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+    }
+    .summary-pill.in_progress { background: rgba(59,130,246,0.15); color: #60a5fa; }
+    .summary-pill.pending { background: rgba(251,191,36,0.15); color: #fbbf24; }
+    .summary-pill.completed { background: rgba(16,185,129,0.15); color: #34d399; }
+    .summary-pill.failed { background: rgba(239,68,68,0.15); color: #f87171; }
+    .summary-pill.cancelled { background: rgba(156,163,175,0.15); color: #9ca3af; }
+    .filter-btn.active { opacity: 1; }
+    .filter-btn:not(.active) { opacity: 0.5; }
+    .table th {
+        font-weight: 600;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        opacity: 0.7;
+    }
+    .table td { vertical-align: middle; font-size: 0.875rem; }
+    .ip-list { font-family: 'Courier New', Courier, monospace; font-size: 0.8rem; }
+    .status-badge { font-size: 0.75rem; }
+    .error-text { font-size: 0.75rem; max-width: 200px; }
+    .auto-refresh-indicator {
+        font-size: 0.75rem;
+        opacity: 0.5;
+    }
+    .pagination-controls {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.25rem;
+        padding: 1rem 0;
+        flex-wrap: wrap;
+    }
+    .pagination-controls .page-info {
+        font-size: 0.85rem;
+        opacity: 0.6;
+        margin: 0 0.75rem;
+    }
+    .pagination-controls .btn { min-width: 2.25rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="card ops-card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-journal-text me-2"></i>Operations Log</h5>
+        <div class="d-flex align-items-center gap-3">
+            <span class="auto-refresh-indicator"><i class="bi bi-arrow-repeat me-1"></i>Auto-refresh: 5s</span>
+            <button class="btn btn-sm btn-outline-danger" id="cancel-all-btn"><i class="bi bi-stop-circle me-1"></i>Cancel All</button>
+            <button class="btn btn-sm btn-outline-primary" id="refresh-ops-btn"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button>
+        </div>
+    </div>
+    <div class="card-body">
+        <!-- Summary -->
+        <div id="ops-summary" class="d-flex flex-wrap gap-2 mb-3">
+            <span class="summary-pill in_progress"><i class="bi bi-arrow-repeat"></i> <span id="sum-in_progress">0</span> In Progress</span>
+            <span class="summary-pill pending"><i class="bi bi-clock"></i> <span id="sum-pending">0</span> Pending</span>
+            <span class="summary-pill completed"><i class="bi bi-check-circle"></i> <span id="sum-completed">0</span> Completed</span>
+            <span class="summary-pill failed"><i class="bi bi-x-circle"></i> <span id="sum-failed">0</span> Failed</span>
+            <span class="summary-pill cancelled"><i class="bi bi-stop-circle"></i> <span id="sum-cancelled">0</span> Cancelled</span>
+        </div>
+
+        <!-- Filters + Search -->
+        <div class="d-flex flex-wrap gap-2 mb-3 align-items-center justify-content-between">
+            <div class="d-flex flex-wrap gap-2">
+                <button class="btn btn-sm btn-outline-light filter-btn active" data-status="">All</button>
+                <button class="btn btn-sm btn-outline-info filter-btn" data-status="in_progress">In Progress</button>
+                <button class="btn btn-sm btn-outline-warning filter-btn" data-status="pending">Pending</button>
+                <button class="btn btn-sm btn-outline-success filter-btn" data-status="completed">Completed</button>
+                <button class="btn btn-sm btn-outline-danger filter-btn" data-status="failed">Failed</button>
+                <button class="btn btn-sm btn-outline-secondary filter-btn" data-status="cancelled">Cancelled</button>
+            </div>
+            <input type="text" id="ops-search" class="form-control form-control-sm" style="max-width:250px" placeholder="Search operations...">
+        </div>
+
+        <!-- Table -->
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Device</th>
+                        <th>Action</th>
+                        <th>IP Addresses</th>
+                        <th>Status</th>
+                        <th>Attempts</th>
+                        <th>Created</th>
+                        <th>Error</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="ops-tbody">
+                    <tr><td colspan="9" class="text-center text-muted py-4">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        <div class="d-flex align-items-center justify-content-between flex-wrap px-3 py-2">
+            <div class="d-flex align-items-center gap-2">
+                <label for="ops-page-size" class="small text-muted mb-0">Show</label>
+                <select id="ops-page-size" class="form-select form-select-sm" style="width:auto">
+                    <option value="25" selected>25</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="500">500</option>
+                </select>
+                <span class="small text-muted mb-0">per page</span>
+            </div>
+            <div id="ops-pagination" class="pagination-controls mb-0 py-0"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function() {
+    var REFRESH_INTERVAL = 5000;
+    var PAGE_SIZE = 25;
+    var currentFilter = '';
+    var searchTerm = '';
+    var currentPage = 1;
+    var allOps = [];
+    var filteredOps = [];
+
+    var tbody = document.getElementById('ops-tbody');
+    var searchInput = document.getElementById('ops-search');
+    var paginationDiv = document.getElementById('ops-pagination');
+    var pageSizeSelect = document.getElementById('ops-page-size');
+
+    function escHtml(str) {
+        if (!str) return '';
+        return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function statusBadge(status) {
+        var map = {
+            'in_progress': '<span class="badge bg-info bg-opacity-25 status-badge"><i class="bi bi-arrow-repeat me-1"></i>In Progress</span>',
+            'pending': '<span class="badge bg-warning bg-opacity-25 status-badge"><i class="bi bi-clock me-1"></i>Pending</span>',
+            'completed': '<span class="badge bg-success bg-opacity-25 status-badge"><i class="bi bi-check-circle me-1"></i>Completed</span>',
+            'failed': '<span class="badge bg-danger bg-opacity-25 status-badge"><i class="bi bi-x-circle me-1"></i>Failed</span>',
+            'cancelled': '<span class="badge bg-secondary bg-opacity-25 status-badge"><i class="bi bi-stop-circle me-1"></i>Cancelled</span>'
+        };
+        return map[status] || '<span class="badge bg-secondary status-badge">' + escHtml(status) + '</span>';
+    }
+
+    function formatIPs(ips) {
+        if (!ips || ips.length === 0) return '<span class="text-muted">—</span>';
+        if (ips.length <= 3) return '<span class="ip-list">' + ips.map(escHtml).join(', ') + '</span>';
+        return '<span class="ip-list">' + ips.slice(0, 3).map(escHtml).join(', ') + '</span>'
+             + '<br><small class="text-muted">+' + (ips.length - 3) + ' more</small>';
+    }
+
+    // Apply search + status filter, then paginate
+    function applyFilters() {
+        var term = searchTerm.toLowerCase();
+        filteredOps = allOps.filter(function(op) {
+            // Status filter
+            if (currentFilter && op.status !== currentFilter) return false;
+            // Search filter
+            if (term) {
+                var haystack = [
+                    String(op.id), op.device_hostname || '', op.action || '',
+                    (op.ip_addresses || []).join(' '), op.status || '',
+                    op.created_at || '', op.error_message || ''
+                ].join(' ').toLowerCase();
+                if (haystack.indexOf(term) === -1) return false;
+            }
+            return true;
+        });
+
+        var totalPages = Math.max(1, Math.ceil(filteredOps.length / PAGE_SIZE));
+        if (currentPage > totalPages) currentPage = totalPages;
+
+        renderTable();
+        renderPagination();
+    }
+
+    function renderTable() {
+        if (filteredOps.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">' +
+                '<i class="bi bi-journal d-block mb-2" style="font-size:2rem;opacity:0.3"></i>' +
+                'No operations found.</td></tr>';
+            return;
+        }
+
+        var start = (currentPage - 1) * PAGE_SIZE;
+        var end = Math.min(start + PAGE_SIZE, filteredOps.length);
+        var pageData = filteredOps.slice(start, end);
+
+        var html = '';
+        pageData.forEach(function(op) {
+            var cancelBtn = (op.status === 'pending' || op.status === 'in_progress')
+                ? '<button class="btn btn-sm btn-outline-warning cancel-op-btn" data-id="' + op.id + '" title="Cancel"><i class="bi bi-stop-circle"></i></button>'
+                : '';
+            html += '<tr>' +
+                '<td><code class="small">' + escHtml(String(op.id)) + '</code></td>' +
+                '<td class="fw-semibold">' + escHtml(op.device_hostname || '—') + '</td>' +
+                '<td><span class="badge ' + (op.action === 'add' ? 'bg-success' : 'bg-danger') + ' bg-opacity-25">' + escHtml(op.action) + '</span></td>' +
+                '<td>' + formatIPs(op.ip_addresses) + '</td>' +
+                '<td>' + statusBadge(op.status) + '</td>' +
+                '<td>' + (op.attempt_count || 0) + '</td>' +
+                '<td class="small text-muted">' + escHtml(op.created_at || '—') + '</td>' +
+                '<td class="error-text text-danger">' + escHtml(op.error_message || '') + '</td>' +
+                '<td>' + cancelBtn + '</td>' +
+                '</tr>';
+        });
+        tbody.innerHTML = html;
+
+        // Bind cancel buttons
+        tbody.querySelectorAll('.cancel-op-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var opId = this.dataset.id;
+                this.disabled = true;
+                this.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+                fetch('/api/operations/' + opId + '/cancel', { method: 'POST' })
+                    .then(function(r) { return r.json(); })
+                    .then(function() { fetchOps(); })
+                    .catch(function() { fetchOps(); });
+            });
+        });
+    }
+
+    function renderPagination() {
+        var total = filteredOps.length;
+        var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+        if (totalPages <= 1) {
+            paginationDiv.innerHTML = total > 0
+                ? '<span class="page-info">' + total + ' operation' + (total !== 1 ? 's' : '') + '</span>'
+                : '';
+            return;
+        }
+
+        var start = (currentPage - 1) * PAGE_SIZE + 1;
+        var end = Math.min(currentPage * PAGE_SIZE, total);
+
+        var html = '<button class="btn btn-sm btn-outline-light" id="ops-page-prev"' + (currentPage <= 1 ? ' disabled' : '') + '><i class="bi bi-chevron-left"></i></button>';
+
+        var pages = [];
+        if (totalPages <= 7) {
+            for (var i = 1; i <= totalPages; i++) pages.push(i);
+        } else {
+            pages.push(1);
+            if (currentPage > 3) pages.push('...');
+            for (var i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) {
+                pages.push(i);
+            }
+            if (currentPage < totalPages - 2) pages.push('...');
+            pages.push(totalPages);
+        }
+
+        pages.forEach(function(p) {
+            if (p === '...') {
+                html += '<span class="btn btn-sm disabled opacity-50">…</span>';
+            } else {
+                html += '<button class="btn btn-sm ' + (p === currentPage ? 'btn-primary' : 'btn-outline-light') + ' ops-page-btn" data-page="' + p + '">' + p + '</button>';
+            }
+        });
+
+        html += '<button class="btn btn-sm btn-outline-light" id="ops-page-next"' + (currentPage >= totalPages ? ' disabled' : '') + '><i class="bi bi-chevron-right"></i></button>';
+        html += '<span class="page-info">Showing ' + start + '–' + end + ' of ' + total + '</span>';
+
+        paginationDiv.innerHTML = html;
+
+        var prevBtn = document.getElementById('ops-page-prev');
+        var nextBtn = document.getElementById('ops-page-next');
+        if (prevBtn) prevBtn.addEventListener('click', function() { if (currentPage > 1) { currentPage--; applyFilters(); } });
+        if (nextBtn) nextBtn.addEventListener('click', function() { if (currentPage < totalPages) { currentPage++; applyFilters(); } });
+        document.querySelectorAll('.ops-page-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                currentPage = parseInt(this.getAttribute('data-page'));
+                applyFilters();
+            });
+        });
+    }
+
+    function fetchOps() {
+        fetch('/api/operations')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                // Update summary
+                if (data.summary) {
+                    ['in_progress', 'pending', 'completed', 'failed', 'cancelled'].forEach(function(s) {
+                        var el = document.getElementById('sum-' + s);
+                        if (el) el.textContent = data.summary[s] || 0;
+                    });
+                }
+                allOps = data.operations || [];
+                applyFilters();
+            })
+            .catch(function() {});
+    }
+
+    // Search input
+    searchInput.addEventListener('input', function() {
+        searchTerm = this.value;
+        currentPage = 1;
+        applyFilters();
+    });
+
+    // Page size selector
+    pageSizeSelect.addEventListener('change', function() {
+        PAGE_SIZE = parseInt(this.value);
+        currentPage = 1;
+        applyFilters();
+    });
+
+    // Filter buttons
+    document.querySelectorAll('.filter-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
+            this.classList.add('active');
+            currentFilter = this.dataset.status;
+            currentPage = 1;
+            applyFilters();
+        });
+    });
+
+    // Cancel All button
+    document.getElementById('cancel-all-btn').addEventListener('click', function() {
+        if (!confirm('Cancel all pending and in-progress operations?')) return;
+        var btn = this;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Cancelling...';
+        fetch('/api/operations/cancel-all', { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function() {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-stop-circle me-1"></i>Cancel All';
+                fetchOps();
+            })
+            .catch(function() {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-stop-circle me-1"></i>Cancel All';
+            });
+    });
+
+    // Refresh button
+    document.getElementById('refresh-ops-btn').addEventListener('click', function() { fetchOps(); });
+
+    // Initial load + auto-refresh
+    fetchOps();
+    setInterval(fetchOps, REFRESH_INTERVAL);
+})();
+</script>
+{% endblock %}

@@ -7,6 +7,7 @@ from flask import Blueprint, flash, jsonify, redirect, request, url_for
 from auth import login_required
 from config import Config
 from services.device_manager import DeviceManager
+from services.rules_engine import RulesEngine
 from services.status_monitor import StatusMonitor
 
 logger = logging.getLogger(__name__)
@@ -44,14 +45,105 @@ def add_device():
             sudo_password = request.form.get("sudo_password", "").strip() or ""
             device = dm.add_linux(hostname, port, username, password, key_path, friendly_name, ssh_key, sudo_password=sudo_password)
             msg = f"Linux device {hostname} added successfully."
+        elif device_type == "cisco_ios":
+            hostname = request.form.get("hostname", "").strip()
+            port = int(request.form.get("ssh_port", 22))
+            username = request.form.get("ssh_username", "").strip()
+            password = request.form.get("ssh_password", "").strip()
+            enable_password = request.form.get("enable_password", "").strip()
+            group_name = request.form.get("group_name", "SOC_BLOCKLIST").strip()
+            friendly_name = request.form.get("friendly_name", "").strip()
+            device = dm.add_cisco_ios(hostname, port, username, password, enable_password, acl_name=group_name, friendly_name=friendly_name)
+            msg = f"Cisco IOS device {hostname} added successfully."
+        elif device_type == "cisco_asa":
+            hostname = request.form.get("hostname", "").strip()
+            port = int(request.form.get("ssh_port", 22))
+            username = request.form.get("ssh_username", "").strip()
+            password = request.form.get("ssh_password", "").strip()
+            enable_password = request.form.get("enable_password", "").strip()
+            group_name = request.form.get("group_name", "SOC_BLOCKLIST").strip()
+            friendly_name = request.form.get("friendly_name", "").strip()
+            device = dm.add_cisco_asa(hostname, port, username, password, enable_password, object_group_name=group_name, friendly_name=friendly_name)
+            msg = f"Cisco ASA device {hostname} added successfully."
+        elif device_type == "fortinet":
+            hostname = request.form.get("hostname", "").strip()
+            port = int(request.form.get("ssh_port", 22))
+            username = request.form.get("ssh_username", "").strip()
+            password = request.form.get("ssh_password", "").strip()
+            group_name = request.form.get("group_name", "SOC_BLOCKLIST").strip()
+            friendly_name = request.form.get("friendly_name", "").strip()
+            device = dm.add_fortinet(hostname, port, username, password, address_group_name=group_name, friendly_name=friendly_name)
+            msg = f"Fortinet device {hostname} added successfully."
+        elif device_type == "palo_alto":
+            hostname = request.form.get("hostname", "").strip()
+            port = int(request.form.get("ssh_port", 22))
+            username = request.form.get("ssh_username", "").strip()
+            password = request.form.get("ssh_password", "").strip()
+            group_name = request.form.get("group_name", "SOC_BLOCKLIST").strip()
+            friendly_name = request.form.get("friendly_name", "").strip()
+            device = dm.add_palo_alto(hostname, port, username, password, address_group_name=group_name, friendly_name=friendly_name)
+            msg = f"Palo Alto device {hostname} added successfully."
+        elif device_type == "unifi":
+            hostname = request.form.get("hostname", "").strip()
+            api_port = int(request.form.get("api_port", 443))
+            username = request.form.get("ssh_username", "").strip()
+            password = request.form.get("ssh_password", "").strip()
+            group_name = request.form.get("group_name", "SOC_BLOCKLIST").strip()
+            friendly_name = request.form.get("friendly_name", "").strip()
+            device = dm.add_unifi(hostname, api_port, username, password, network_list_name=group_name, friendly_name=friendly_name)
+            msg = f"UniFi device {hostname} added successfully."
+        elif device_type == "aws_waf":
+            hostname = request.form.get("hostname", "").strip()
+            access_key = request.form.get("access_key", "").strip()
+            secret_key = request.form.get("secret_key", "").strip()
+            region = request.form.get("region", "").strip()
+            ip_set_name = request.form.get("ip_set_name", "").strip()
+            ip_set_scope = request.form.get("ip_set_scope", "REGIONAL").strip()
+            friendly_name = request.form.get("friendly_name", "").strip()
+            device = dm.add_aws_waf(hostname, access_key, secret_key, region, ip_set_name, ip_set_scope, friendly_name)
+            msg = f"AWS WAF device {hostname} added successfully."
+        elif device_type == "azure_nsg":
+            hostname = request.form.get("hostname", "").strip()
+            tenant_id = request.form.get("tenant_id", "").strip()
+            client_id = request.form.get("client_id", "").strip()
+            client_secret = request.form.get("client_secret", "").strip()
+            subscription_id = request.form.get("subscription_id", "").strip()
+            resource_group = request.form.get("resource_group", "").strip()
+            nsg_name = request.form.get("nsg_name", "").strip()
+            friendly_name = request.form.get("friendly_name", "").strip()
+            device = dm.add_azure_nsg(hostname, tenant_id, client_id, client_secret, subscription_id, resource_group, nsg_name, friendly_name)
+            msg = f"Azure NSG device {hostname} added successfully."
+        elif device_type == "gcp_firewall":
+            hostname = request.form.get("hostname", "").strip()
+            service_account_json = request.form.get("service_account_json", "").strip()
+            project_id = request.form.get("project_id", "").strip()
+            network_name = request.form.get("network_name", "").strip()
+            friendly_name = request.form.get("friendly_name", "").strip()
+            device = dm.add_gcp_firewall(hostname, service_account_json, project_id, network_name, friendly_name)
+            msg = f"GCP Firewall device {hostname} added successfully."
+        elif device_type == "oci_nsg":
+            hostname = request.form.get("hostname", "").strip()
+            tenancy_ocid = request.form.get("tenancy_ocid", "").strip()
+            user_ocid = request.form.get("user_ocid", "").strip()
+            api_key_pem = request.form.get("api_key_pem", "").strip()
+            fingerprint = request.form.get("fingerprint", "").strip()
+            region = request.form.get("region", "").strip()
+            nsg_ocid = request.form.get("nsg_ocid", "").strip()
+            friendly_name = request.form.get("friendly_name", "").strip()
+            device = dm.add_oci_nsg(hostname, tenancy_ocid, user_ocid, api_key_pem, fingerprint, region, nsg_ocid, friendly_name)
+            msg = f"OCI NSG device {hostname} added successfully."
         else:
             if wants_json:
                 return jsonify({"success": False, "message": "Invalid device type."}), 400
             flash("Invalid device type.", "error")
             return redirect(url_for("settings.index"))
 
+        # Trigger full blocklist sync for the new device
+        engine = RulesEngine(db_path=db_path)
+        operation_id = engine.onboard_device(device["id"])
+
         if wants_json:
-            return jsonify({"success": True, "message": msg, "device_id": device["id"]})
+            return jsonify({"success": True, "message": msg, "device_id": device["id"], "operation_id": operation_id})
         flash(msg)
     except ValueError as e:
         if wants_json:
@@ -101,10 +193,92 @@ def add_device_json():
             if not hostname or not username:
                 return jsonify({"success": False, "message": "Hostname and username are required."}), 400
             device = dm.add_linux(hostname, port, username, password, key_path, friendly_name, ssh_key, sudo_password=sudo_password)
+        elif device_type == "cisco_ios":
+            hostname = (data.get("hostname") or "").strip()
+            port = int(data.get("ssh_port") or 22)
+            username = (data.get("ssh_username") or "").strip()
+            password = (data.get("ssh_password") or "").strip()
+            enable_password = (data.get("enable_password") or "").strip()
+            group_name = (data.get("group_name") or "SOC_BLOCKLIST").strip()
+            friendly_name = (data.get("friendly_name") or "").strip()
+            device = dm.add_cisco_ios(hostname, port, username, password, enable_password, acl_name=group_name, friendly_name=friendly_name)
+        elif device_type == "cisco_asa":
+            hostname = (data.get("hostname") or "").strip()
+            port = int(data.get("ssh_port") or 22)
+            username = (data.get("ssh_username") or "").strip()
+            password = (data.get("ssh_password") or "").strip()
+            enable_password = (data.get("enable_password") or "").strip()
+            group_name = (data.get("group_name") or "SOC_BLOCKLIST").strip()
+            friendly_name = (data.get("friendly_name") or "").strip()
+            device = dm.add_cisco_asa(hostname, port, username, password, enable_password, object_group_name=group_name, friendly_name=friendly_name)
+        elif device_type == "fortinet":
+            hostname = (data.get("hostname") or "").strip()
+            port = int(data.get("ssh_port") or 22)
+            username = (data.get("ssh_username") or "").strip()
+            password = (data.get("ssh_password") or "").strip()
+            group_name = (data.get("group_name") or "SOC_BLOCKLIST").strip()
+            friendly_name = (data.get("friendly_name") or "").strip()
+            device = dm.add_fortinet(hostname, port, username, password, address_group_name=group_name, friendly_name=friendly_name)
+        elif device_type == "palo_alto":
+            hostname = (data.get("hostname") or "").strip()
+            port = int(data.get("ssh_port") or 22)
+            username = (data.get("ssh_username") or "").strip()
+            password = (data.get("ssh_password") or "").strip()
+            group_name = (data.get("group_name") or "SOC_BLOCKLIST").strip()
+            friendly_name = (data.get("friendly_name") or "").strip()
+            device = dm.add_palo_alto(hostname, port, username, password, address_group_name=group_name, friendly_name=friendly_name)
+        elif device_type == "unifi":
+            hostname = (data.get("hostname") or "").strip()
+            api_port = int(data.get("api_port") or 443)
+            username = (data.get("ssh_username") or "").strip()
+            password = (data.get("ssh_password") or "").strip()
+            group_name = (data.get("group_name") or "SOC_BLOCKLIST").strip()
+            friendly_name = (data.get("friendly_name") or "").strip()
+            device = dm.add_unifi(hostname, api_port, username, password, network_list_name=group_name, friendly_name=friendly_name)
+        elif device_type == "aws_waf":
+            hostname = (data.get("hostname") or "").strip()
+            access_key = (data.get("access_key") or "").strip()
+            secret_key = (data.get("secret_key") or "").strip()
+            region = (data.get("region") or "").strip()
+            ip_set_name = (data.get("ip_set_name") or "").strip()
+            ip_set_scope = (data.get("ip_set_scope") or "REGIONAL").strip()
+            friendly_name = (data.get("friendly_name") or "").strip()
+            device = dm.add_aws_waf(hostname, access_key, secret_key, region, ip_set_name, ip_set_scope, friendly_name)
+        elif device_type == "azure_nsg":
+            hostname = (data.get("hostname") or "").strip()
+            tenant_id = (data.get("tenant_id") or "").strip()
+            client_id = (data.get("client_id") or "").strip()
+            client_secret = (data.get("client_secret") or "").strip()
+            subscription_id = (data.get("subscription_id") or "").strip()
+            resource_group = (data.get("resource_group") or "").strip()
+            nsg_name = (data.get("nsg_name") or "").strip()
+            friendly_name = (data.get("friendly_name") or "").strip()
+            device = dm.add_azure_nsg(hostname, tenant_id, client_id, client_secret, subscription_id, resource_group, nsg_name, friendly_name)
+        elif device_type == "gcp_firewall":
+            hostname = (data.get("hostname") or "").strip()
+            service_account_json = (data.get("service_account_json") or "").strip()
+            project_id = (data.get("project_id") or "").strip()
+            network_name = (data.get("network_name") or "").strip()
+            friendly_name = (data.get("friendly_name") or "").strip()
+            device = dm.add_gcp_firewall(hostname, service_account_json, project_id, network_name, friendly_name)
+        elif device_type == "oci_nsg":
+            hostname = (data.get("hostname") or "").strip()
+            tenancy_ocid = (data.get("tenancy_ocid") or "").strip()
+            user_ocid = (data.get("user_ocid") or "").strip()
+            api_key_pem = (data.get("api_key_pem") or "").strip()
+            fingerprint = (data.get("fingerprint") or "").strip()
+            region = (data.get("region") or "").strip()
+            nsg_ocid = (data.get("nsg_ocid") or "").strip()
+            friendly_name = (data.get("friendly_name") or "").strip()
+            device = dm.add_oci_nsg(hostname, tenancy_ocid, user_ocid, api_key_pem, fingerprint, region, nsg_ocid, friendly_name)
         else:
-            return jsonify({"success": False, "message": "Invalid device type. Must be 'pfsense' or 'linux'."}), 400
+            return jsonify({"success": False, "message": "Invalid device type."}), 400
 
-        return jsonify({"success": True, "message": f"Device {hostname} added.", "device_id": device["id"]})
+        # Trigger full blocklist sync for the new device
+        engine = RulesEngine(db_path=db_path)
+        operation_id = engine.onboard_device(device["id"])
+
+        return jsonify({"success": True, "message": f"Device {hostname} added.", "device_id": device["id"], "operation_id": operation_id})
     except ValueError as e:
         return jsonify({"success": False, "message": str(e)}), 400
     except Exception as e:
@@ -121,7 +295,9 @@ def edit_device(device_id):
 
     fields = {}
     for key in ("hostname", "web_username", "web_password", "block_method",
-                "ssh_username", "ssh_password", "ssh_key_path", "friendly_name", "ssh_key", "sudo_password"):
+                "ssh_username", "ssh_password", "ssh_key_path", "friendly_name",
+                "ssh_key", "sudo_password", "enable_password", "group_name",
+                "cloud_credentials", "cloud_region", "cloud_resource_id"):
         val = request.form.get(key, "").strip()
         if val:
             fields[key] = val
@@ -129,6 +305,10 @@ def edit_device(device_id):
     port_val = request.form.get("ssh_port", "").strip()
     if port_val:
         fields["ssh_port"] = int(port_val)
+
+    api_port_val = request.form.get("api_port", "").strip()
+    if api_port_val:
+        fields["api_port"] = int(api_port_val)
 
     try:
         dm.update_device(device_id, **fields)
@@ -141,55 +321,6 @@ def edit_device(device_id):
 
     return redirect(url_for("settings.index"))
 
-def _cleanup_device(device, db_path):
-    """Remove all block rules/routes from a device before deletion."""
-    from services.blocklist_service import BlocklistService
-    blocklist_service = BlocklistService(db_path=db_path)
-    blocklist = blocklist_service.get_blocklist()
-    blocked_ips = [entry["ip_address"] for entry in blocklist]
-
-    if not blocked_ips:
-        return
-
-    if device["device_type"] == "pfsense":
-        from clients.pfsense_client import PfSenseClient
-        client = PfSenseClient(
-            host=device["hostname"],
-            username=device.get("web_username", ""),
-            password=device.get("web_password", ""),
-        )
-        if device.get("block_method") == "floating_rule":
-            # Remove floating rules first, then alias
-            try:
-                client.remove_floating_rules("soc_blocklist")
-            except Exception as e:
-                logger.warning("Failed to remove floating rules on %s: %s", device["hostname"], e)
-            try:
-                client.remove_alias("soc_blocklist")
-            except Exception as e:
-                logger.warning("Failed to remove alias on %s: %s", device["hostname"], e)
-        else:
-            # Remove null routes
-            for ip in blocked_ips:
-                try:
-                    client.remove_null_route(ip)
-                except Exception as e:
-                    logger.warning("Failed to remove null route for %s on %s: %s", ip, device["hostname"], e)
-    elif device["device_type"] == "linux":
-        from clients.linux_client import LinuxClient
-        client = LinuxClient(
-            host=device["hostname"],
-            port=device.get("ssh_port", 22),
-            username=device.get("ssh_username", ""),
-            password=device.get("ssh_password"),
-            key_path=device.get("ssh_key_path"),
-            key_content=device.get("ssh_key"),
-            sudo_password=device.get("sudo_password"),
-        )
-        try:
-            client.remove_null_routes_bulk(blocked_ips)
-        except Exception as e:
-            logger.warning("Failed to remove null routes on %s: %s", device["hostname"], e)
 
 
 
@@ -217,22 +348,16 @@ def remove_device(device_id):
             flash("Device not found.", "error")
             return redirect(url_for("settings.index"))
 
-        # Cleanup rules/routes on the device if requested
-        if cleanup:
-            try:
-                _cleanup_device(device, db_path)
-            except Exception as e:
-                logger.warning("Cleanup failed for device %s: %s", device_id, e)
-                # Continue with removal even if cleanup fails
-
-        dm.remove_device(device_id)
+        # Decommission via RulesEngine (handles cleanup and deletion)
+        engine = RulesEngine(db_path=db_path)
+        operation_id = engine.decommission_device(device_id, cleanup=cleanup)
 
         msg = "Device removed successfully."
         if cleanup:
-            msg = "Device removed and rules cleaned up."
+            msg = "Device removal with cleanup initiated."
 
         if is_json:
-            return jsonify({"success": True, "message": msg})
+            return jsonify({"success": True, "message": msg, "operation_id": operation_id})
         flash(msg)
     except ValueError as e:
         if is_json:
@@ -250,10 +375,14 @@ def remove_device(device_id):
 @devices_bp.route("/devices/test/<int:device_id>", methods=["POST"])
 @login_required
 def test_device(device_id):
-    """Test connectivity to a device and return JSON result."""
+    """Test connectivity to a device and return JSON result.
+
+    For new device types (cisco_ios, cisco_asa, fortinet, palo_alto, unifi),
+    instantiates the correct client via CLIENT_REGISTRY and calls check_health().
+    For legacy types, falls back to StatusMonitor.check_device().
+    """
     db_path = Config.DATABASE_PATH
     dm = DeviceManager(db_path=db_path)
-    monitor = StatusMonitor(db_path=db_path)
 
     try:
         devices = dm.get_all_devices()
@@ -261,7 +390,21 @@ def test_device(device_id):
         if device is None:
             return jsonify({"success": False, "message": f"Device {device_id} not found."}), 404
 
-        status = monitor.check_device(device)
+        device_type = device.get("device_type", "")
+        client_types = {"cisco_ios", "cisco_asa", "fortinet", "palo_alto", "unifi",
+                        "aws_waf", "azure_nsg", "gcp_firewall", "oci_nsg"}
+
+        if device_type in client_types:
+            from services.push_orchestrator import CLIENT_REGISTRY
+            factory = CLIENT_REGISTRY.get(device_type)
+            if factory is None:
+                return jsonify({"success": False, "message": f"No client registered for type '{device_type}'."}), 400
+            client = factory(device)
+            healthy = client.check_health()
+            status = "online" if healthy else "offline"
+        else:
+            monitor = StatusMonitor(db_path=db_path)
+            status = monitor.check_device(device)
 
         # Persist status to DB so the GUI reflects it immediately
         from datetime import datetime, timezone
@@ -331,6 +474,96 @@ def validate_credentials():
                 return jsonify({"success": False, "message": f"SSH connection failed: {e}"}), 400
             except Exception as e:
                 return jsonify({"success": False, "message": f"Connection failed: {e}"}), 400
+
+        elif device_type in ("cisco_ios", "cisco_asa", "fortinet", "palo_alto", "unifi"):
+            from services.push_orchestrator import CLIENT_REGISTRY
+            # Build a device dict from the submitted data
+            dev = {
+                "hostname": hostname,
+                "ssh_port": int(data.get("ssh_port") or 22),
+                "ssh_username": (data.get("ssh_username") or "").strip(),
+                "ssh_password": (data.get("ssh_password") or "").strip(),
+                "enable_password": (data.get("enable_password") or "").strip(),
+                "group_name": (data.get("group_name") or "SOC_BLOCKLIST").strip(),
+                "api_port": int(data.get("api_port") or 443),
+            }
+            factory = CLIENT_REGISTRY.get(device_type)
+            if factory is None:
+                return jsonify({"success": False, "message": f"No client for type '{device_type}'."}), 400
+            try:
+                client = factory(dev)
+                healthy = client.check_health()
+                if healthy:
+                    return jsonify({"success": True, "message": "Connection successful — credentials are valid."})
+                else:
+                    return jsonify({"success": False, "message": "Connection failed — check credentials and connectivity."}), 400
+            except Exception as e:
+                return jsonify({"success": False, "message": f"Connection failed: {e}"}), 400
+
+        elif device_type in ("aws_waf", "azure_nsg", "gcp_firewall", "oci_nsg"):
+            import json as _json
+            from services.push_orchestrator import CLIENT_REGISTRY
+
+            # Build a device dict with cloud_credentials JSON matching what
+            # the CLIENT_REGISTRY factory functions expect.
+            cloud_creds = {}
+            cloud_region = ""
+            cloud_resource_id = ""
+
+            if device_type == "aws_waf":
+                cloud_creds = {
+                    "access_key": (data.get("access_key") or "").strip(),
+                    "secret_key": (data.get("secret_key") or "").strip(),
+                    "ip_set_scope": (data.get("ip_set_scope") or "REGIONAL").strip(),
+                }
+                cloud_region = (data.get("region") or "").strip()
+                cloud_resource_id = (data.get("ip_set_name") or "").strip()
+            elif device_type == "azure_nsg":
+                cloud_creds = {
+                    "tenant_id": (data.get("tenant_id") or "").strip(),
+                    "client_id": (data.get("client_id") or "").strip(),
+                    "client_secret": (data.get("client_secret") or "").strip(),
+                    "subscription_id": (data.get("subscription_id") or "").strip(),
+                    "resource_group": (data.get("resource_group") or "").strip(),
+                }
+                cloud_resource_id = (data.get("nsg_name") or "").strip()
+            elif device_type == "gcp_firewall":
+                cloud_creds = {
+                    "service_account_json": (data.get("service_account_json") or "").strip(),
+                    "network_name": (data.get("network_name") or "").strip(),
+                }
+                cloud_resource_id = (data.get("project_id") or "").strip()
+            elif device_type == "oci_nsg":
+                cloud_creds = {
+                    "tenancy_ocid": (data.get("tenancy_ocid") or "").strip(),
+                    "user_ocid": (data.get("user_ocid") or "").strip(),
+                    "api_key_pem": (data.get("api_key_pem") or "").strip(),
+                    "fingerprint": (data.get("fingerprint") or "").strip(),
+                }
+                cloud_region = (data.get("region") or "").strip()
+                cloud_resource_id = (data.get("nsg_ocid") or "").strip()
+
+            dev = {
+                "hostname": hostname,
+                "device_type": device_type,
+                "cloud_credentials": _json.dumps(cloud_creds),
+                "cloud_region": cloud_region,
+                "cloud_resource_id": cloud_resource_id,
+            }
+
+            factory = CLIENT_REGISTRY.get(device_type)
+            if factory is None:
+                return jsonify({"success": False, "message": f"No client for type '{device_type}'."}), 400
+            try:
+                client = factory(dev)
+                healthy = client.check_health()
+                if healthy:
+                    return jsonify({"success": True, "message": "Connection successful — credentials are valid."})
+                else:
+                    return jsonify({"success": False, "message": "Connection failed — check credentials and connectivity."}), 400
+            except Exception as e:
+                return jsonify({"success": False, "message": f"Connection failed: {e}"}), 400
+
         else:
             return jsonify({"success": False, "message": "Invalid device type."}), 400
     except Exception as e:

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <!-- Outer shield shape -->
+  <path d="M60 8L16 28v36c0 26.5 18.8 51.2 44 56 25.2-4.8 44-29.5 44-56V28L60 8z"
+        fill="url(#shieldGrad)" stroke="url(#strokeGrad)" stroke-width="2"/>
+  <!-- Inner membrane ring -->
+  <ellipse cx="60" cy="56" rx="28" ry="28"
+           fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1.5"/>
+  <ellipse cx="60" cy="56" rx="20" ry="20"
+           fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+  <!-- Network nodes (membrane dots) -->
+  <circle cx="60" cy="36" r="3" fill="#818cf8"/>
+  <circle cx="80" cy="50" r="2.5" fill="#6366f1"/>
+  <circle cx="76" cy="72" r="2.5" fill="#818cf8"/>
+  <circle cx="44" cy="72" r="2.5" fill="#6366f1"/>
+  <circle cx="40" cy="50" r="2.5" fill="#818cf8"/>
+  <!-- Connection lines between nodes -->
+  <line x1="60" y1="36" x2="80" y2="50" stroke="#6366f1" stroke-width="1" opacity="0.5"/>
+  <line x1="80" y1="50" x2="76" y2="72" stroke="#818cf8" stroke-width="1" opacity="0.4"/>
+  <line x1="76" y1="72" x2="44" y2="72" stroke="#6366f1" stroke-width="1" opacity="0.5"/>
+  <line x1="44" y1="72" x2="40" y2="50" stroke="#818cf8" stroke-width="1" opacity="0.4"/>
+  <line x1="40" y1="50" x2="60" y2="36" stroke="#6366f1" stroke-width="1" opacity="0.5"/>
+  <!-- Central lock/block icon -->
+  <rect x="52" y="51" width="16" height="13" rx="2" fill="#6366f1"/>
+  <path d="M56 51v-4a4 4 0 018 0v4" fill="none" stroke="#c7d2fe" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="60" cy="57.5" r="1.5" fill="#c7d2fe"/>
+  <!-- Gradients -->
+  <defs>
+    <linearGradient id="shieldGrad" x1="60" y1="8" x2="60" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1e1b4b"/>
+      <stop offset="100%" stop-color="#0f0d2e"/>
+    </linearGradient>
+    <linearGradient id="strokeGrad" x1="16" y1="28" x2="104" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="50%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+  </defs>
+</svg>
