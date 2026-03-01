@@ -61,7 +61,7 @@
 
 ```bash
 # Clone the repository
-git clone <repo-url> && cd ip-active-response
+git clone https://github.com/cs64-net/IP-Active-Response && cd ip-active-response
 
 # Generate a secret key
 export SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
