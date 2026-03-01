@@ -119,4 +119,3 @@ Flask App
 ---
 
 <p align="center"><strong>Lab Edition</strong> — Not for commercial use.<br>
-For commercial licensing, contact the Cyber Membrane team.</p>
