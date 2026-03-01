@@ -106,6 +106,7 @@
         </div>
     </div>
     <div class="col-6 col-lg-3">
+        <a href="{{ url_for('devices.devices_page') }}" class="text-decoration-none">
         <div class="card stat-card card-devices text-white">
             <div class="card-body py-3">
                 <div class="text-white-50 small fw-semibold mb-1">Total Devices</div>
@@ -113,6 +114,7 @@
             </div>
             <i class="bi bi-hdd-network stat-icon"></i>
         </div>
+        </a>
     </div>
     <div class="col-6 col-lg-3">
         <div class="card stat-card card-online text-white">
@@ -321,8 +323,11 @@
 <div class="row mb-4">
     <div class="col-12">
         <div class="card blocklist-card">
-            <div class="card-header py-3">
+            <div class="card-header d-flex justify-content-between align-items-center py-3">
                 <h5 class="mb-0 fw-semibold"><i class="bi bi-hdd-stack me-2"></i>Device Status</h5>
+                <a href="{{ url_for('devices.devices_page') }}" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-gear me-1"></i>Manage Devices
+                </a>
             </div>
             <div class="card-body" id="device-panel">
                 {% if devices %}
@@ -384,7 +389,7 @@
                 {% else %}
                 <div class="text-center py-4">
                     <i class="bi bi-hdd-network d-block mb-2" style="font-size:2rem;opacity:0.3"></i>
-                    <p class="text-muted mb-0">No devices registered. <a href="{{ url_for('settings.index') }}">Add devices in Settings</a>.</p>
+                    <p class="text-muted mb-0">No devices registered. <a href="{{ url_for('devices.devices_page') }}">Add devices on the Devices page</a>.</p>
                 </div>
                 {% endif %}
             </div>

@@ -1,14 +1,17 @@
-"""Fortinet FortiGate firewall client for managing IP blocks via SSH.
+"""Fortinet FortiGate firewall client for managing IP blocks via SSH or HTTPS.
 
-Uses Paramiko to connect via SSH and manages firewall address objects
-and an address group containing blocked IPs. No enable mode is needed
-on FortiGate — the CLI is available immediately after SSH authentication.
+Uses Paramiko to connect via SSH (legacy) or the FortiOS REST API via HTTPS
+(preferred) and manages firewall address objects and an address group
+containing blocked IPs. No enable mode is needed on FortiGate — the CLI
+is available immediately after SSH authentication.
 """
 
+import json
 import logging
 import time
 
 import paramiko
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -33,24 +36,33 @@ class FortinetClient:
     so they can be identified and cleaned up by the SOC IP Blocker.
     """
 
-    def __init__(self, host: str, port: int, username: str,
-                 password: str,
-                 address_group_name: str = "SOC_BLOCKLIST"):
-        """Initialize SSH connection parameters for FortiGate.
+    def __init__(self, host: str, port: int = 22, username: str = "",
+                 password: str = "",
+                 address_group_name: str = "SOC_BLOCKLIST",
+                 connection_protocol: str = "ssh",
+                 api_key: str = "",
+                 api_port: int = 443):
+        """Initialize connection parameters for FortiGate.
 
         Args:
             host: Hostname or IP of the FortiGate firewall.
-            port: SSH port number.
-            username: SSH username.
-            password: SSH password.
+            port: SSH port number (used when connection_protocol is 'ssh').
+            username: SSH username (used when connection_protocol is 'ssh').
+            password: SSH password (used when connection_protocol is 'ssh').
             address_group_name: Name of the address group to manage
                 (default: SOC_BLOCKLIST).
+            connection_protocol: 'ssh' (existing) or 'https' (FortiOS REST API).
+            api_key: FortiOS REST API key (required when protocol is 'https').
+            api_port: HTTPS API port (default 443, used when protocol is 'https').
         """
         self.host = host
         self.port = port
         self.username = username
         self.password = password
         self.address_group_name = address_group_name
+        self.connection_protocol = connection_protocol
+        self.api_key = api_key
+        self.api_port = api_port
 
     @staticmethod
     def _address_object_name(ip: str) -> str:
@@ -179,8 +191,271 @@ class FortinetClient:
         output = self._read_until_prompt(shell)
         return output
 
+    # ------------------------------------------------------------------
+    # HTTPS / FortiOS REST API helpers
+    # ------------------------------------------------------------------
+
+    def _api_base_url(self) -> str:
+        """Return the base URL for the FortiOS REST API."""
+        return f"https://{self.host}:{self.api_port}"
+
+    def _api_headers(self) -> dict:
+        """Return authorization headers for the FortiOS REST API."""
+        return {"Authorization": f"Bearer {self.api_key}"}
+
+    def _api_add_address(self, ip: str) -> bool:
+        """Create a firewall address object via the FortiOS REST API.
+
+        Args:
+            ip: IP address (optionally with CIDR notation).
+
+        Returns:
+            True if the address was created successfully.
+
+        Raises:
+            FortinetError: If the API call fails.
+        """
+        obj_name = self._address_object_name(ip)
+        subnet = self._ip_to_subnet(ip)
+        url = f"{self._api_base_url()}/api/v2/cmdb/firewall/address"
+        payload = {
+            "name": obj_name,
+            "type": "ipmask",
+            "subnet": subnet,
+        }
+        resp = requests.post(
+            url, json=payload, headers=self._api_headers(), verify=False, timeout=30,
+        )
+        if resp.status_code in (200, 201):
+            return True
+        # 424 = already exists — treat as success
+        if resp.status_code == 424:
+            return True
+        raise FortinetError(
+            f"Failed to create address {obj_name}: HTTP {resp.status_code} {resp.text}"
+        )
+
+    def _api_add_to_group(self, ip_addresses: list) -> None:
+        """Add address objects to the address group via the FortiOS REST API.
+
+        Reads the current group members, appends the new ones, and PUTs
+        the updated member list.
+
+        Args:
+            ip_addresses: List of IP addresses whose SOC_ objects should
+                be added to the group.
+
+        Raises:
+            FortinetError: If the API call fails.
+        """
+        group_name = self.address_group_name
+        url = f"{self._api_base_url()}/api/v2/cmdb/firewall/addrgrp/{group_name}"
+
+        # Fetch current members
+        get_resp = requests.get(
+            url, headers=self._api_headers(), verify=False, timeout=30,
+        )
+        if get_resp.status_code == 200:
+            data = get_resp.json()
+            results = data.get("results", [])
+            current_members = []
+            if results:
+                current_members = [
+                    m["name"] for m in results[0].get("member", [])
+                ]
+        else:
+            current_members = []
+
+        new_members = [self._address_object_name(ip) for ip in ip_addresses]
+        all_members = list(set(current_members + new_members))
+        member_payload = [{"name": m} for m in all_members]
+
+        resp = requests.put(
+            url,
+            json={"member": member_payload},
+            headers=self._api_headers(),
+            verify=False,
+            timeout=30,
+        )
+        if resp.status_code not in (200, 201):
+            raise FortinetError(
+                f"Failed to update group {group_name}: HTTP {resp.status_code} {resp.text}"
+            )
+
+    def _api_remove_from_group(self, ip_addresses: list) -> None:
+        """Remove address objects from the address group via the FortiOS REST API.
+
+        Reads the current group members, removes the specified ones, and PUTs
+        the updated member list.
+
+        Args:
+            ip_addresses: List of IP addresses whose SOC_ objects should
+                be removed from the group.
+
+        Raises:
+            FortinetError: If the API call fails.
+        """
+        group_name = self.address_group_name
+        url = f"{self._api_base_url()}/api/v2/cmdb/firewall/addrgrp/{group_name}"
+
+        get_resp = requests.get(
+            url, headers=self._api_headers(), verify=False, timeout=30,
+        )
+        if get_resp.status_code == 200:
+            data = get_resp.json()
+            results = data.get("results", [])
+            current_members = []
+            if results:
+                current_members = [
+                    m["name"] for m in results[0].get("member", [])
+                ]
+        else:
+            return  # Group doesn't exist, nothing to remove from
+
+        names_to_remove = {self._address_object_name(ip) for ip in ip_addresses}
+        remaining = [m for m in current_members if m not in names_to_remove]
+
+        if not remaining:
+            # FortiOS requires at least one member; leave group empty by
+            # setting a placeholder or skip the update.
+            remaining = ["none"]
+
+        member_payload = [{"name": m} for m in remaining]
+        resp = requests.put(
+            url,
+            json={"member": member_payload},
+            headers=self._api_headers(),
+            verify=False,
+            timeout=30,
+        )
+        if resp.status_code not in (200, 201):
+            raise FortinetError(
+                f"Failed to update group {group_name}: HTTP {resp.status_code} {resp.text}"
+            )
+
+    def _api_remove_address(self, ip: str) -> bool:
+        """Delete a firewall address object via the FortiOS REST API.
+
+        Args:
+            ip: IP address (optionally with CIDR notation).
+
+        Returns:
+            True if the address was deleted successfully.
+
+        Raises:
+            FortinetError: If the API call fails.
+        """
+        obj_name = self._address_object_name(ip)
+        url = f"{self._api_base_url()}/api/v2/cmdb/firewall/address/{obj_name}"
+        resp = requests.delete(
+            url, headers=self._api_headers(), verify=False, timeout=30,
+        )
+        if resp.status_code in (200, 204):
+            return True
+        # 404 = already gone — treat as success
+        if resp.status_code == 404:
+            return True
+        raise FortinetError(
+            f"Failed to delete address {obj_name}: HTTP {resp.status_code} {resp.text}"
+        )
+
+    # ------------------------------------------------------------------
+    # HTTPS bulk operations
+    # ------------------------------------------------------------------
+
+    def _api_add_rules_bulk(self, ip_addresses: list) -> dict:
+        """Create address objects and add them to the group via HTTPS API.
+
+        Args:
+            ip_addresses: List of IP addresses to block.
+
+        Returns:
+            Dict with 'success' and 'failed' lists.
+        """
+        results = {"success": [], "failed": []}
+        if not ip_addresses:
+            return results
+
+        for i in range(0, len(ip_addresses), BATCH_SIZE):
+            batch = ip_addresses[i:i + BATCH_SIZE]
+            created_ips = []
+            for ip in batch:
+                try:
+                    self._api_add_address(ip)
+                    created_ips.append(ip)
+                except Exception as e:
+                    results["failed"].append({"ip": ip, "error": str(e)})
+
+            if created_ips:
+                try:
+                    self._api_add_to_group(created_ips)
+                    results["success"].extend(created_ips)
+                except Exception as e:
+                    for ip in created_ips:
+                        results["failed"].append({"ip": ip, "error": str(e)})
+
+        added = len(results["success"])
+        failed = len(results["failed"])
+        logger.info(
+            "HTTPS bulk add on %s: %d added, %d failed",
+            self.host, added, failed,
+        )
+        return results
+
+    def _api_remove_rules_bulk(self, ip_addresses: list) -> dict:
+        """Remove address objects from the group and delete them via HTTPS API.
+
+        Args:
+            ip_addresses: List of IP addresses to unblock.
+
+        Returns:
+            Dict with 'success' and 'failed' lists.
+        """
+        results = {"success": [], "failed": []}
+        if not ip_addresses:
+            return results
+
+        for i in range(0, len(ip_addresses), BATCH_SIZE):
+            batch = ip_addresses[i:i + BATCH_SIZE]
+            try:
+                self._api_remove_from_group(batch)
+            except Exception as e:
+                for ip in batch:
+                    results["failed"].append({"ip": ip, "error": str(e)})
+                continue
+
+            for ip in batch:
+                try:
+                    self._api_remove_address(ip)
+                    results["success"].append(ip)
+                except Exception as e:
+                    results["failed"].append({"ip": ip, "error": str(e)})
+
+        removed = len(results["success"])
+        failed = len(results["failed"])
+        logger.info(
+            "HTTPS bulk remove on %s: %d removed, %d failed",
+            self.host, removed, failed,
+        )
+        return results
+
     def add_rules_bulk(self, ip_addresses: list) -> dict:
         """Create address objects and add them to the address group.
+
+        Routes to HTTPS API or SSH implementation based on connection_protocol.
+
+        Args:
+            ip_addresses: List of IP addresses to block.
+
+        Returns:
+            Dict with 'success' and 'failed' lists.
+        """
+        if self.connection_protocol == "https":
+            return self._api_add_rules_bulk(ip_addresses)
+        return self._ssh_add_rules_bulk(ip_addresses)
+
+    def _ssh_add_rules_bulk(self, ip_addresses: list) -> dict:
+        """Create address objects and add them to the address group via SSH.
 
         For each IP, creates a firewall address object named ``SOC_<ip>``
         with subnet ``<ip>/32``, then appends it to the address group.
@@ -283,6 +558,21 @@ class FortinetClient:
     def remove_rules_bulk(self, ip_addresses: list) -> dict:
         """Remove address objects from the group and delete them.
 
+        Routes to HTTPS API or SSH implementation based on connection_protocol.
+
+        Args:
+            ip_addresses: List of IP addresses to unblock.
+
+        Returns:
+            Dict with 'success' and 'failed' lists.
+        """
+        if self.connection_protocol == "https":
+            return self._api_remove_rules_bulk(ip_addresses)
+        return self._ssh_remove_rules_bulk(ip_addresses)
+
+    def _ssh_remove_rules_bulk(self, ip_addresses: list) -> dict:
+        """Remove address objects from the group and delete them via SSH.
+
         For each IP, removes the address object from the address group
         using ``unselect member``, then deletes the address object.
         Processes in batches.
@@ -380,18 +670,37 @@ class FortinetClient:
         return results
 
     def check_health(self) -> bool:
-        """Verify SSH connectivity to the FortiGate.
+        """Verify connectivity to the FortiGate.
 
-        Connects via SSH and verifies the CLI prompt is available.
-        FortiGate does not require enable mode.
+        When connection_protocol is 'ssh': connects via SSH and verifies
+        the CLI prompt is available.
+        When connection_protocol is 'https': makes a GET request to the
+        FortiOS REST API system status endpoint.
 
         Returns:
-            True if SSH connection succeeds, False otherwise.
+            True if connection succeeds, False otherwise.
         """
+        if self.connection_protocol == "https":
+            return self._api_check_health()
         try:
             client, shell = self._get_ssh_shell()
             client.close()
             return True
+        except Exception:
+            return False
+
+    def _api_check_health(self) -> bool:
+        """Verify HTTPS API connectivity to the FortiGate.
+
+        Returns:
+            True if the API responds successfully, False otherwise.
+        """
+        try:
+            url = f"{self._api_base_url()}/api/v2/cmdb/system/status"
+            resp = requests.get(
+                url, headers=self._api_headers(), verify=False, timeout=10,
+            )
+            return resp.status_code == 200
         except Exception:
             return False
 

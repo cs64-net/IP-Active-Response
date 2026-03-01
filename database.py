@@ -29,14 +29,15 @@ CREATE TABLE IF NOT EXISTS managed_devices (
     device_type TEXT NOT NULL CHECK(device_type IN (
         'pfsense', 'linux', 'cisco_ios', 'cisco_asa',
         'fortinet', 'palo_alto', 'unifi',
-        'aws_waf', 'azure_nsg', 'gcp_firewall', 'oci_nsg'
+        'aws_waf', 'azure_nsg', 'gcp_firewall', 'oci_nsg',
+        'juniper_srx', 'juniper_mx', 'checkpoint'
     )),
     status TEXT DEFAULT 'unknown',
     last_checked TIMESTAMP,
     web_username TEXT,
     web_password TEXT,
     block_method TEXT CHECK(block_method IN (
-        'null_route', 'floating_rule', 'alias_only', 'cloud_api'
+        'null_route', 'floating_rule', 'alias_only', 'cloud_api', 'address_group'
     )),
     ssh_port INTEGER DEFAULT 22,
     ssh_username TEXT,
@@ -50,7 +51,10 @@ CREATE TABLE IF NOT EXISTS managed_devices (
     api_port INTEGER DEFAULT 443,
     cloud_credentials TEXT DEFAULT '',
     cloud_region TEXT DEFAULT '',
-    cloud_resource_id TEXT DEFAULT ''
+    cloud_resource_id TEXT DEFAULT '',
+    connection_protocol TEXT DEFAULT 'ssh',
+    ipv4_group_name TEXT DEFAULT '',
+    ipv6_group_name TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS push_statuses (
@@ -388,6 +392,83 @@ def init_db(db_path=None):
             conn.execute("ALTER TABLE managed_devices_new RENAME TO managed_devices")
             conn.execute("PRAGMA foreign_keys=ON")
 
+
+        # Expanded device support: add new columns if missing
+        cursor = conn.execute("PRAGMA table_info(managed_devices)")
+        existing_cols = {row[1] for row in cursor.fetchall()}
+        if "connection_protocol" not in existing_cols:
+            conn.execute("ALTER TABLE managed_devices ADD COLUMN connection_protocol TEXT DEFAULT 'ssh'")
+        if "ipv4_group_name" not in existing_cols:
+            conn.execute("ALTER TABLE managed_devices ADD COLUMN ipv4_group_name TEXT DEFAULT ''")
+        if "ipv6_group_name" not in existing_cols:
+            conn.execute("ALTER TABLE managed_devices ADD COLUMN ipv6_group_name TEXT DEFAULT ''")
+
+        # Expanded device support: update CHECK constraints for new device types and block methods
+        table_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='managed_devices'"
+        ).fetchone()[0]
+        needs_expanded_migration = "'juniper_srx'" not in table_sql
+
+        if needs_expanded_migration:
+            conn.execute("PRAGMA foreign_keys=OFF")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS managed_devices_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    hostname TEXT NOT NULL,
+                    device_type TEXT NOT NULL CHECK(device_type IN (
+                        'pfsense', 'linux', 'cisco_ios', 'cisco_asa',
+                        'fortinet', 'palo_alto', 'unifi',
+                        'aws_waf', 'azure_nsg', 'gcp_firewall', 'oci_nsg',
+                        'juniper_srx', 'juniper_mx', 'checkpoint'
+                    )),
+                    status TEXT DEFAULT 'unknown',
+                    last_checked TIMESTAMP,
+                    web_username TEXT,
+                    web_password TEXT,
+                    block_method TEXT CHECK(block_method IN (
+                        'null_route', 'floating_rule', 'alias_only', 'cloud_api', 'address_group'
+                    )),
+                    ssh_port INTEGER DEFAULT 22,
+                    ssh_username TEXT,
+                    ssh_password TEXT,
+                    ssh_key_path TEXT,
+                    friendly_name TEXT DEFAULT '',
+                    ssh_key TEXT DEFAULT '',
+                    sudo_password TEXT DEFAULT '',
+                    enable_password TEXT DEFAULT '',
+                    group_name TEXT DEFAULT 'SOC_BLOCKLIST',
+                    api_port INTEGER DEFAULT 443,
+                    cloud_credentials TEXT DEFAULT '',
+                    cloud_region TEXT DEFAULT '',
+                    cloud_resource_id TEXT DEFAULT '',
+                    connection_protocol TEXT DEFAULT 'ssh',
+                    ipv4_group_name TEXT DEFAULT '',
+                    ipv6_group_name TEXT DEFAULT ''
+                )
+            """)
+            conn.execute("""
+                INSERT INTO managed_devices_new (
+                    id, hostname, device_type, status, last_checked,
+                    web_username, web_password, block_method,
+                    ssh_port, ssh_username, ssh_password, ssh_key_path,
+                    friendly_name, ssh_key, sudo_password,
+                    enable_password, group_name, api_port,
+                    cloud_credentials, cloud_region, cloud_resource_id,
+                    connection_protocol, ipv4_group_name, ipv6_group_name
+                )
+                SELECT
+                    id, hostname, device_type, status, last_checked,
+                    web_username, web_password, block_method,
+                    ssh_port, ssh_username, ssh_password, ssh_key_path,
+                    friendly_name, ssh_key, sudo_password,
+                    enable_password, group_name, api_port,
+                    cloud_credentials, cloud_region, cloud_resource_id,
+                    connection_protocol, ipv4_group_name, ipv6_group_name
+                FROM managed_devices
+            """)
+            conn.execute("DROP TABLE managed_devices")
+            conn.execute("ALTER TABLE managed_devices_new RENAME TO managed_devices")
+            conn.execute("PRAGMA foreign_keys=ON")
 
         # Migrate app_settings: add missing columns for existing databases
         cursor = conn.execute("PRAGMA table_info(app_settings)")

@@ -1,0 +1,2019 @@
+{% extends "base.html" %}
+{% block title %}Devices — IP Active Response{% endblock %}
+
+{% block extra_head %}
+<style>
+    .device-card {
+        animation: fadeInUp 0.4s ease forwards;
+        opacity: 0;
+        border-radius: 1rem;
+        border: 1px solid rgba(255,255,255,0.06);
+        transition: transform 0.25s ease, box-shadow 0.25s ease;
+    }
+    .device-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+    }
+
+    /* ── Responsive CSS Grid: 4-col lg, 2-col md, 1-col sm ── */
+    .devices-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 1.25rem;
+    }
+    @media (min-width: 768px) {
+        .devices-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
+    @media (min-width: 992px) {
+        .devices-grid {
+            grid-template-columns: repeat(4, 1fr);
+        }
+    }
+
+    /* ── Summary bar styling ── */
+    .summary-bar .summary-stat {
+        text-align: center;
+        padding: 0.75rem 1.5rem;
+    }
+    .summary-bar .summary-stat .stat-value {
+        font-size: 1.75rem;
+        font-weight: 700;
+        line-height: 1;
+    }
+    .summary-bar .summary-stat .stat-label {
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        opacity: 0.7;
+        margin-top: 0.25rem;
+    }
+
+    /* ── Empty state styling ── */
+    .empty-state {
+        text-align: center;
+        padding: 4rem 1rem;
+    }
+    .empty-state .empty-icon {
+        font-size: 4rem;
+        opacity: 0.3;
+        margin-bottom: 1rem;
+    }
+    .empty-state h4 {
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+    }
+    .empty-state p {
+        opacity: 0.6;
+        margin-bottom: 1.5rem;
+    }
+
+    /* ── Page header ── */
+    .page-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-bottom: 1.5rem;
+    }
+    .page-header h3 {
+        font-weight: 700;
+        margin: 0;
+    }
+
+    /* ── Wizard type card hover ── */
+    .wizard-type-card:hover {
+        border-color: rgba(99,102,241,0.5) !important;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    }
+    .modal-content {
+        border-radius: 1rem;
+        border: 1px solid rgba(255,255,255,0.08);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+{# ── Compute summary counts from devices list ── #}
+{% set total_count = devices | length %}
+{% set online_count = devices | selectattr('status', 'equalto', 'online') | list | length %}
+{% set offline_count = devices | selectattr('status', 'equalto', 'offline') | list | length %}
+
+<!-- Page Header with action buttons -->
+<div class="page-header">
+    <h3><i class="bi bi-hdd-network me-2"></i>Devices</h3>
+    <div class="d-flex gap-2">
+        {% if total_count > 0 %}
+        <button class="btn btn-outline-secondary" id="refreshAllBtn">
+            <i class="bi bi-arrow-clockwise me-1"></i>Refresh All
+        </button>
+        {% endif %}
+        <button class="btn btn-primary" id="addDeviceBtn" data-bs-toggle="modal" data-bs-target="#addDeviceModal">
+            <i class="bi bi-plus-lg me-1"></i>Add Device
+        </button>
+    </div>
+</div>
+
+<!-- Summary Bar -->
+{% if total_count > 0 %}
+<div class="card mb-4" style="border-radius:1rem;border:1px solid rgba(255,255,255,0.06);">
+    <div class="card-body p-0">
+        <div class="summary-bar d-flex justify-content-center flex-wrap">
+            <div class="summary-stat">
+                <div class="stat-value" id="totalCount">{{ total_count }}</div>
+                <div class="stat-label">Total Devices</div>
+            </div>
+            <div class="summary-stat">
+                <div class="stat-value text-success" id="onlineCount">{{ online_count }}</div>
+                <div class="stat-label">Online</div>
+            </div>
+            <div class="summary-stat">
+                <div class="stat-value text-danger" id="offlineCount">{{ offline_count }}</div>
+                <div class="stat-label">Offline</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Device Cards Grid Container -->
+{% if total_count > 0 %}
+<div class="devices-grid" id="devicesGrid">
+    {# ── Device type icon mapping ── #}
+    {% set icon_map = {
+        'pfsense':      {'icon': 'bi-fire',         'color': 'text-warning'},
+        'linux':        {'icon': 'bi-terminal',      'color': 'text-info'},
+        'cisco_ios':    {'icon': 'bi-hdd-rack',      'color': 'text-info'},
+        'cisco_asa':    {'icon': 'bi-shield-lock',   'color': 'text-info'},
+        'fortinet':     {'icon': 'bi-shield-check',  'color': 'text-danger'},
+        'palo_alto':    {'icon': 'bi-bricks',        'color': 'text-warning'},
+        'unifi':        {'icon': 'bi-wifi',          'color': 'text-primary'},
+        'juniper_srx':  {'icon': 'bi-router',        'color': 'text-info'},
+        'juniper_mx':   {'icon': 'bi-diagram-3',     'color': 'text-info'},
+        'checkpoint':   {'icon': 'bi-shield-fill-check', 'color': 'text-primary'},
+        'aws_waf':      {'icon': 'bi-cloud',         'color': 'text-warning'},
+        'azure_nsg':    {'icon': 'bi-cloud-fill',    'color': 'text-info'},
+        'gcp_firewall': {'icon': 'bi-cloud-haze',    'color': 'text-primary'},
+        'oci_nsg':      {'icon': 'bi-cloud-check',   'color': 'text-danger'}
+    } %}
+
+    {# ── Device type human-readable labels ── #}
+    {% set type_labels = {
+        'pfsense': 'pfSense',
+        'linux': 'Linux',
+        'cisco_ios': 'Cisco IOS',
+        'cisco_asa': 'Cisco ASA',
+        'fortinet': 'Fortinet',
+        'palo_alto': 'Palo Alto',
+        'unifi': 'UniFi',
+        'juniper_srx': 'Juniper SRX',
+        'juniper_mx': 'Juniper MX',
+        'checkpoint': 'Check Point',
+        'aws_waf': 'AWS WAF',
+        'azure_nsg': 'Azure NSG',
+        'gcp_firewall': 'GCP Firewall',
+        'oci_nsg': 'OCI NSG'
+    } %}
+
+    {# ── Status badge class mapping ── #}
+    {% set status_map = {
+        'online':  'bg-success bg-opacity-25',
+        'offline': 'bg-danger bg-opacity-25',
+        'unknown': 'bg-warning bg-opacity-25'
+    } %}
+
+    {% for device in devices %}
+    {% set dev_icon = icon_map.get(device.device_type, {'icon': 'bi-hdd-network', 'color': 'text-secondary'}) %}
+    <div class="card device-card" data-device-id="{{ device.id }}" style="animation-delay: {{ loop.index0 * 0.05 }}s">
+        <div class="card-body">
+            <!-- Device icon and name -->
+            <div class="d-flex align-items-center mb-3">
+                <i class="bi {{ dev_icon.icon }} {{ dev_icon.color }} me-2" style="font-size:1.5rem;"></i>
+                <div class="flex-grow-1 min-width-0">
+                    <h6 class="mb-0 text-truncate device-name">{{ device.friendly_name or device.hostname }}</h6>
+                    {% if device.friendly_name %}
+                    <small class="text-muted text-truncate d-block">{{ device.hostname }}</small>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Device type label and badges -->
+            <div class="d-flex flex-wrap gap-2 mb-3">
+                <span class="badge bg-secondary bg-opacity-25 device-type-label">{{ type_labels.get(device.device_type, device.device_type) }}</span>
+                <span class="badge bg-info bg-opacity-25 device-block-method">{{ device.block_method or 'N/A' }}</span>
+                <span class="badge status-badge {{ status_map.get(device.status, 'bg-warning bg-opacity-25') }} device-status" data-status="{{ device.status }}">{{ device.status | capitalize }}</span>
+            </div>
+
+            <!-- Alias-only / group name notice -->
+            {% if device.device_type == 'juniper_srx' and device.block_method == 'address_group' %}
+            <div class="small text-body-secondary mb-2"><i class="bi bi-info-circle me-1"></i>Address-set: <code>{{ device.group_name or 'SOC_BLOCKLIST' }}</code> — reference in a security policy</div>
+            {% elif device.device_type == 'juniper_mx' and device.block_method == 'address_group' %}
+            <div class="small text-body-secondary mb-2"><i class="bi bi-info-circle me-1"></i>Prefix-list: <code>{{ device.group_name or 'SOC_BLOCKLIST' }}</code> — reference in a firewall filter</div>
+            {% elif device.device_type == 'checkpoint' %}
+            <div class="small text-body-secondary mb-2"><i class="bi bi-info-circle me-1"></i>Network group: <code>{{ device.group_name or 'SOC_BLOCKLIST' }}</code> — reference in a security policy</div>
+            {% elif device.device_type in ('fortinet', 'palo_alto') %}
+            <div class="small text-body-secondary mb-2"><i class="bi bi-info-circle me-1"></i>Address group: <code>{{ device.group_name or 'SOC_BLOCKLIST' }}</code> — reference in a firewall policy</div>
+            {% elif device.device_type in ('cisco_ios',) %}
+            <div class="small text-body-secondary mb-2"><i class="bi bi-info-circle me-1"></i>ACL: <code>{{ device.group_name or 'SOC_BLOCKLIST' }}</code> — reference in an interface or route-map</div>
+            {% elif device.device_type in ('cisco_asa',) %}
+            <div class="small text-body-secondary mb-2"><i class="bi bi-info-circle me-1"></i>Object group: <code>{{ device.group_name or 'SOC_BLOCKLIST' }}</code> — reference in an access-list</div>
+            {% elif device.device_type == 'unifi' %}
+            <div class="small text-body-secondary mb-2"><i class="bi bi-info-circle me-1"></i>Network lists: <code>{{ device.group_name or 'SOC_BLOCKLIST' }}</code> (IPv4) and <code>{{ device.group_name or 'SOC_BLOCKLIST' }}_V6</code> (IPv6)</div>
+            {% elif device.device_type == 'aws_waf' %}
+            <div class="small text-body-secondary mb-2"><i class="bi bi-info-circle me-1"></i>IP sets: <code>{{ device.ipv4_group_name or (device.cloud_resource_id ~ '-ipv4') }}</code> (IPv4) and <code>{{ device.ipv6_group_name or (device.cloud_resource_id ~ '-ipv6') }}</code> (IPv6)</div>
+            {% endif %}
+
+            <!-- Inline result area for test/sync feedback -->
+            <div class="device-result-area mb-2" id="deviceResult-{{ device.id }}" style="display:none;"></div>
+
+            <!-- Action buttons -->
+            <div class="d-flex flex-wrap gap-1">
+                <button class="btn btn-sm btn-outline-info device-test-btn" data-device-id="{{ device.id }}" title="Test connectivity">
+                    <i class="bi bi-plug me-1"></i>Test
+                </button>
+                <button class="btn btn-sm btn-outline-success device-sync-btn" data-device-id="{{ device.id }}" title="Sync blocklist">
+                    <i class="bi bi-arrow-repeat me-1"></i>Sync
+                </button>
+                <button class="btn btn-sm btn-outline-warning device-edit-btn" data-device-id="{{ device.id }}" data-bs-toggle="modal" data-bs-target="#editModal{{ device.id }}" title="Edit device">
+                    <i class="bi bi-pencil me-1"></i>Edit
+                </button>
+                <button class="btn btn-sm btn-outline-danger device-remove-btn" data-device-id="{{ device.id }}" data-bs-toggle="modal" data-bs-target="#removeModal{{ device.id }}" title="Remove device">
+                    <i class="bi bi-trash me-1"></i>Remove
+                </button>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<!-- Empty State -->
+<div class="empty-state" id="emptyState">
+    <div class="empty-icon">
+        <i class="bi bi-hdd-network"></i>
+    </div>
+    <h4>No Devices Configured</h4>
+    <p>Get started by adding your first network device to monitor and manage.</p>
+    <button class="btn btn-primary btn-lg" data-bs-toggle="modal" data-bs-target="#addDeviceModal">
+        <i class="bi bi-plus-lg me-1"></i>Add Your First Device
+    </button>
+</div>
+{% endif %}
+
+<!-- Add Device Wizard Modal -->
+<div class="modal fade" id="addDeviceModal" tabindex="-1" aria-labelledby="addDeviceModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header border-bottom border-opacity-10">
+                <h5 class="modal-title fw-semibold" id="addDeviceModalLabel">
+                    <i class="bi bi-plus-circle me-2"></i>Add New Device
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <!-- Progress indicator -->
+                <div class="d-flex justify-content-center mb-4">
+                    <div class="d-flex align-items-center">
+                        <span class="badge rounded-pill bg-primary wizard-step-badge" id="step-badge-1">1</span>
+                        <span class="small ms-1 me-3 wizard-step-label" id="step-label-1">Type</span>
+                        <div style="width:40px;height:2px;background:rgba(255,255,255,0.15)" class="me-3"></div>
+                        <span class="badge rounded-pill bg-secondary wizard-step-badge" id="step-badge-2">2</span>
+                        <span class="small ms-1 me-3 wizard-step-label text-muted" id="step-label-2">Details</span>
+                        <div style="width:40px;height:2px;background:rgba(255,255,255,0.15)" class="me-3"></div>
+                        <span class="badge rounded-pill bg-secondary wizard-step-badge" id="step-badge-3">3</span>
+                        <span class="small ms-1 wizard-step-label text-muted" id="step-label-3">Setup</span>
+                    </div>
+                </div>
+
+                <!-- Step 1: Choose Device Type -->
+                <div id="wizard-step-1">
+                    <h6 class="text-center mb-3">Choose Device Type</h6>
+                    <div class="row g-3 justify-content-center">
+                        <div class="col-5">
+                            <div class="card h-100 wizard-type-card" data-type="pfsense" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-4" style="background:linear-gradient(135deg,rgba(234,88,12,0.1),rgba(251,146,60,0.05));border-radius:0.875rem">
+                                    <i class="bi bi-fire" style="font-size:3rem;color:#f97316"></i>
+                                    <h5 class="mt-3 mb-1 fw-semibold">pfSense</h5>
+                                    <small class="text-body-secondary">Firewall with web API</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-5">
+                            <div class="card h-100 wizard-type-card" data-type="linux" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-4" style="background:linear-gradient(135deg,rgba(59,130,246,0.1),rgba(96,165,250,0.05));border-radius:0.875rem">
+                                    <i class="bi bi-terminal" style="font-size:3rem;color:#3b82f6"></i>
+                                    <h5 class="mt-3 mb-1 fw-semibold">Linux</h5>
+                                    <small class="text-body-secondary">SSH null route blocking</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row g-3 justify-content-center mt-1">
+                        <div class="col-4">
+                            <div class="card h-100 wizard-type-card" data-type="cisco_ios" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-3" style="background:linear-gradient(135deg,rgba(0,188,212,0.1),rgba(0,188,212,0.03));border-radius:0.875rem">
+                                    <i class="bi bi-hdd-rack" style="font-size:2.5rem;color:#00bcd4"></i>
+                                    <h6 class="mt-2 mb-0 fw-semibold">Cisco IOS <span class="badge bg-info text-dark ms-1" style="font-size:0.6rem;vertical-align:middle">Beta</span></h6>
+                                    <small class="text-body-secondary">Router ACL management</small>
+                                    <small class="text-warning d-block mt-1"><i class="bi bi-exclamation-triangle me-1"></i>Max 1K blocklist entries recommended</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="card h-100 wizard-type-card" data-type="cisco_asa" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-3" style="background:linear-gradient(135deg,rgba(0,150,136,0.1),rgba(0,150,136,0.03));border-radius:0.875rem">
+                                    <i class="bi bi-shield-lock" style="font-size:2.5rem;color:#009688"></i>
+                                    <h6 class="mt-2 mb-0 fw-semibold">Cisco ASA <span class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;vertical-align:middle">Alpha</span></h6>
+                                    <small class="text-body-secondary">Object group management</small>
+                                    <small class="text-warning d-block mt-1"><i class="bi bi-exclamation-triangle me-1"></i>Max 1K blocklist entries recommended</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="card h-100 wizard-type-card" data-type="fortinet" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-3" style="background:linear-gradient(135deg,rgba(244,67,54,0.1),rgba(244,67,54,0.03));border-radius:0.875rem">
+                                    <i class="bi bi-shield-check" style="font-size:2.5rem;color:#f44336"></i>
+                                    <h6 class="mt-2 mb-0 fw-semibold">Fortinet <span class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;vertical-align:middle">Alpha</span></h6>
+                                    <small class="text-body-secondary">Address group management</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row g-3 justify-content-center mt-1">
+                        <div class="col-4">
+                            <div class="card h-100 wizard-type-card" data-type="palo_alto" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-3" style="background:linear-gradient(135deg,rgba(255,152,0,0.1),rgba(255,152,0,0.03));border-radius:0.875rem">
+                                    <i class="bi bi-bricks" style="font-size:2.5rem;color:#ff9800"></i>
+                                    <h6 class="mt-2 mb-0 fw-semibold">Palo Alto <span class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;vertical-align:middle">Alpha</span></h6>
+                                    <small class="text-body-secondary">Address group management</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="card h-100 wizard-type-card" data-type="unifi" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-3" style="background:linear-gradient(135deg,rgba(33,150,243,0.1),rgba(33,150,243,0.03));border-radius:0.875rem">
+                                    <i class="bi bi-wifi" style="font-size:2.5rem;color:#2196f3"></i>
+                                    <h6 class="mt-2 mb-0 fw-semibold">UniFi <span class="badge bg-info text-dark ms-1" style="font-size:0.6rem;vertical-align:middle">Beta</span></h6>
+                                    <small class="text-body-secondary">Network List via API</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="card h-100 wizard-type-card" data-type="juniper_srx" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-3" style="background:linear-gradient(135deg,rgba(0,150,136,0.1),rgba(0,150,136,0.03));border-radius:0.875rem">
+                                    <i class="bi bi-router" style="font-size:2.5rem;color:#009688"></i>
+                                    <h6 class="mt-2 mb-0 fw-semibold">Juniper SRX <span class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;vertical-align:middle">Alpha</span></h6>
+                                    <small class="text-body-secondary">Address-set or null route via SSH</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row g-3 justify-content-center mt-1">
+                        <div class="col-4">
+                            <div class="card h-100 wizard-type-card" data-type="juniper_mx" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-3" style="background:linear-gradient(135deg,rgba(0,150,136,0.1),rgba(0,150,136,0.03));border-radius:0.875rem">
+                                    <i class="bi bi-diagram-3" style="font-size:2.5rem;color:#009688"></i>
+                                    <h6 class="mt-2 mb-0 fw-semibold">Juniper MX <span class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;vertical-align:middle">Alpha</span></h6>
+                                    <small class="text-body-secondary">Prefix-list or null route via SSH</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="card h-100 wizard-type-card" data-type="checkpoint" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-3" style="background:linear-gradient(135deg,rgba(156,39,176,0.1),rgba(156,39,176,0.03));border-radius:0.875rem">
+                                    <i class="bi bi-shield-fill-check" style="font-size:2.5rem;color:#9c27b0"></i>
+                                    <h6 class="mt-2 mb-0 fw-semibold">Check Point <span class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;vertical-align:middle">Alpha</span></h6>
+                                    <small class="text-body-secondary">Object group via Management API</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Cloud Provider Cards -->
+                    <h6 class="text-center mt-4 mb-3 text-body-secondary"><i class="bi bi-cloud me-1"></i>Cloud Providers</h6>
+                    <div class="row g-3 justify-content-center">
+                        <div class="col-4">
+                            <div class="card h-100 wizard-type-card" data-type="aws_waf" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-3" style="background:linear-gradient(135deg,rgba(255,153,0,0.1),rgba(255,153,0,0.03));border-radius:0.875rem">
+                                    <i class="bi bi-cloud" style="font-size:2.5rem;color:#ff9900"></i>
+                                    <h6 class="mt-2 mb-0 fw-semibold">AWS WAF <span class="badge bg-info text-dark ms-1" style="font-size:0.6rem;vertical-align:middle">Beta</span></h6>
+                                    <small class="text-body-secondary">WAF IP set management</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="card h-100 wizard-type-card" data-type="azure_nsg" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-3" style="background:linear-gradient(135deg,rgba(0,120,212,0.1),rgba(0,120,212,0.03));border-radius:0.875rem">
+                                    <i class="bi bi-cloud-fill" style="font-size:2.5rem;color:#0078d4"></i>
+                                    <h6 class="mt-2 mb-0 fw-semibold">Azure NSG <span class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;vertical-align:middle">Alpha</span></h6>
+                                    <small class="text-body-secondary">Network Security Group rules</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row g-3 justify-content-center mt-1">
+                        <div class="col-4">
+                            <div class="card h-100 wizard-type-card" data-type="gcp_firewall" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-3" style="background:linear-gradient(135deg,rgba(66,133,244,0.1),rgba(66,133,244,0.03));border-radius:0.875rem">
+                                    <i class="bi bi-cloud-haze" style="font-size:2.5rem;color:#4285f4"></i>
+                                    <h6 class="mt-2 mb-0 fw-semibold">GCP Firewall <span class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;vertical-align:middle">Alpha</span></h6>
+                                    <small class="text-body-secondary">VPC firewall deny rules</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="card h-100 wizard-type-card" data-type="oci_nsg" role="button" style="cursor:pointer;border:2px solid transparent;border-radius:1rem;transition:all 0.2s">
+                                <div class="card-body text-center py-3" style="background:linear-gradient(135deg,rgba(196,22,28,0.1),rgba(196,22,28,0.03));border-radius:0.875rem">
+                                    <i class="bi bi-cloud-check" style="font-size:2.5rem;color:#c4161c"></i>
+                                    <h6 class="mt-2 mb-0 fw-semibold">OCI NSG <span class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;vertical-align:middle">Alpha</span></h6>
+                                    <small class="text-body-secondary">Network Security Group rules</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 2: Device Details -->
+                <div id="wizard-step-2" style="display:none">
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Friendly Name <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="wiz-friendly-name" placeholder="e.g. Main Firewall" required>
+                    </div>
+                    <div class="mb-3" id="wiz-hostname-group">
+                        <label class="form-label small fw-semibold">Hostname / IP <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="wiz-hostname" placeholder="e.g. 192.168.1.1" required>
+                    </div>
+
+                    <!-- pfSense fields -->
+                    <div id="wiz-pfsense-fields" style="display:none">
+                        <div class="row g-3">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Username <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-pf-username" placeholder="admin">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Password <span class="text-danger">*</span></label>
+                                <input type="password" class="form-control" id="wiz-pf-password">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Block Method</label>
+                            <select class="form-select" id="wiz-pf-block-method">
+                                <option value="floating_rule" selected>Floating Rule (recommended)</option>
+                                <option value="null_route">Null Route</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Linux fields -->
+                    <div id="wiz-linux-fields" style="display:none">
+                        <div class="row g-3">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label small fw-semibold">SSH Port</label>
+                                <input type="number" class="form-control" id="wiz-linux-port" value="22">
+                            </div>
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label small fw-semibold">SSH Username <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-linux-username" placeholder="root">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">SSH Key (paste private key content)</label>
+                            <textarea class="form-control" id="wiz-linux-ssh-key" rows="8"
+                                      style="font-family:'Courier New',Courier,monospace;font-size:0.8rem"
+                                      placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">SSH Password <small class="text-body-secondary">(alternative to key)</small></label>
+                            <input type="password" class="form-control" id="wiz-linux-password">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Sudo Password <small class="text-body-secondary">(defaults to SSH password)</small></label>
+                            <input type="password" class="form-control" id="wiz-linux-sudo-password">
+                        </div>
+                    </div>
+
+                    <!-- Cisco IOS fields -->
+                    <div id="wiz-cisco_ios-fields" style="display:none">
+                        <div class="row g-3">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label small fw-semibold">SSH Port</label>
+                                <input type="number" class="form-control" id="wiz-cisco_ios-port" value="22">
+                            </div>
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label small fw-semibold">SSH Username <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-cisco_ios-username" placeholder="admin">
+                            </div>
+                        </div>
+                        <div class="row g-3">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">SSH Password <span class="text-danger">*</span></label>
+                                <input type="password" class="form-control" id="wiz-cisco_ios-password">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Enable Password <span class="text-danger">*</span></label>
+                                <input type="password" class="form-control" id="wiz-cisco_ios-enable-password">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">ACL Name</label>
+                            <input type="text" class="form-control" id="wiz-cisco_ios-group-name" value="SOC_BLOCKLIST" placeholder="SOC_BLOCKLIST">
+                        </div>
+                    </div>
+
+                    <!-- Cisco ASA fields -->
+                    <div id="wiz-cisco_asa-fields" style="display:none">
+                        <div class="row g-3">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label small fw-semibold">SSH Port</label>
+                                <input type="number" class="form-control" id="wiz-cisco_asa-port" value="22">
+                            </div>
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label small fw-semibold">SSH Username <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-cisco_asa-username" placeholder="admin">
+                            </div>
+                        </div>
+                        <div class="row g-3">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">SSH Password <span class="text-danger">*</span></label>
+                                <input type="password" class="form-control" id="wiz-cisco_asa-password">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Enable Password <span class="text-danger">*</span></label>
+                                <input type="password" class="form-control" id="wiz-cisco_asa-enable-password">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Object Group Name</label>
+                            <input type="text" class="form-control" id="wiz-cisco_asa-group-name" value="SOC_BLOCKLIST" placeholder="SOC_BLOCKLIST">
+                        </div>
+                    </div>
+
+                    <!-- Fortinet fields -->
+                    <div id="wiz-fortinet-fields" style="display:none">
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Connection Protocol</label>
+                            <select class="form-select" id="wiz-fortinet-protocol" onchange="toggleFortinetProtocol()">
+                                <option value="https" selected>HTTPS (API Key)</option>
+                                <option value="ssh">SSH</option>
+                            </select>
+                        </div>
+                        <div id="wiz-fortinet-https-fields">
+                            <div class="row g-3">
+                                <div class="col-md-4 mb-3">
+                                    <label class="form-label small fw-semibold">API Port</label>
+                                    <input type="number" class="form-control" id="wiz-fortinet-api-port" value="443">
+                                </div>
+                                <div class="col-md-8 mb-3">
+                                    <label class="form-label small fw-semibold">API Key <span class="text-danger">*</span></label>
+                                    <input type="password" class="form-control" id="wiz-fortinet-api-key" placeholder="FortiOS REST API key">
+                                </div>
+                            </div>
+                        </div>
+                        <div id="wiz-fortinet-ssh-fields" style="display:none">
+                            <div class="row g-3">
+                                <div class="col-md-4 mb-3">
+                                    <label class="form-label small fw-semibold">SSH Port</label>
+                                    <input type="number" class="form-control" id="wiz-fortinet-port" value="22">
+                                </div>
+                                <div class="col-md-8 mb-3">
+                                    <label class="form-label small fw-semibold">SSH Username <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="wiz-fortinet-username" placeholder="admin">
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label small fw-semibold">SSH Password <span class="text-danger">*</span></label>
+                                <input type="password" class="form-control" id="wiz-fortinet-password">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Address Group Name</label>
+                            <input type="text" class="form-control" id="wiz-fortinet-group-name" value="SOC_BLOCKLIST" placeholder="SOC_BLOCKLIST">
+                        </div>
+                    </div>
+
+                    <!-- Palo Alto fields -->
+                    <div id="wiz-palo_alto-fields" style="display:none">
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Connection Protocol</label>
+                            <select class="form-select" id="wiz-palo_alto-protocol" onchange="togglePaloAltoProtocol()">
+                                <option value="https" selected>HTTPS (API Key)</option>
+                                <option value="ssh">SSH</option>
+                            </select>
+                        </div>
+                        <div id="wiz-palo_alto-https-fields">
+                            <div class="row g-3">
+                                <div class="col-md-4 mb-3">
+                                    <label class="form-label small fw-semibold">API Port</label>
+                                    <input type="number" class="form-control" id="wiz-palo_alto-api-port" value="443">
+                                </div>
+                                <div class="col-md-8 mb-3">
+                                    <label class="form-label small fw-semibold">API Key <span class="text-danger">*</span></label>
+                                    <input type="password" class="form-control" id="wiz-palo_alto-api-key" placeholder="PAN-OS API key">
+                                </div>
+                            </div>
+                        </div>
+                        <div id="wiz-palo_alto-ssh-fields" style="display:none">
+                            <div class="row g-3">
+                                <div class="col-md-4 mb-3">
+                                    <label class="form-label small fw-semibold">SSH Port</label>
+                                    <input type="number" class="form-control" id="wiz-palo_alto-port" value="22">
+                                </div>
+                                <div class="col-md-8 mb-3">
+                                    <label class="form-label small fw-semibold">SSH Username <span class="text-danger">*</span></label>
+                                    <input type="text" class="form-control" id="wiz-palo_alto-username" placeholder="admin">
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label small fw-semibold">SSH Password <span class="text-danger">*</span></label>
+                                <input type="password" class="form-control" id="wiz-palo_alto-password">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Address Group Name</label>
+                            <input type="text" class="form-control" id="wiz-palo_alto-group-name" value="SOC_BLOCKLIST" placeholder="SOC_BLOCKLIST">
+                        </div>
+                    </div>
+
+                    <!-- UniFi fields -->
+                    <div id="wiz-unifi-fields" style="display:none">
+                        <div class="row g-3">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label small fw-semibold">API Port</label>
+                                <input type="number" class="form-control" id="wiz-unifi-port" value="443">
+                            </div>
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label small fw-semibold">API Username <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-unifi-username" placeholder="admin">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">API Password <span class="text-danger">*</span></label>
+                            <input type="password" class="form-control" id="wiz-unifi-password">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Network List Name</label>
+                            <input type="text" class="form-control" id="wiz-unifi-group-name" value="SOC_BLOCKLIST" placeholder="SOC_BLOCKLIST">
+                        </div>
+                    </div>
+
+                    <!-- Juniper SRX fields -->
+                    <div id="wiz-juniper_srx-fields" style="display:none">
+                        <div class="row g-3">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label small fw-semibold">SSH Port</label>
+                                <input type="number" class="form-control" id="wiz-juniper_srx-port" value="22">
+                            </div>
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label small fw-semibold">SSH Username <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-juniper_srx-username" placeholder="admin">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">SSH Password <span class="text-danger">*</span></label>
+                            <input type="password" class="form-control" id="wiz-juniper_srx-password">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Address Group Name</label>
+                            <input type="text" class="form-control" id="wiz-juniper_srx-group-name" value="SOC_BLOCKLIST" placeholder="SOC_BLOCKLIST">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Block Method</label>
+                            <select class="form-select" id="wiz-juniper_srx-block-method">
+                                <option value="address_group" selected>Address Group</option>
+                                <option value="null_route">Null Route</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Juniper MX fields -->
+                    <div id="wiz-juniper_mx-fields" style="display:none">
+                        <div class="row g-3">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label small fw-semibold">SSH Port</label>
+                                <input type="number" class="form-control" id="wiz-juniper_mx-port" value="22">
+                            </div>
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label small fw-semibold">SSH Username <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-juniper_mx-username" placeholder="admin">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">SSH Password <span class="text-danger">*</span></label>
+                            <input type="password" class="form-control" id="wiz-juniper_mx-password">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Address Group Name</label>
+                            <input type="text" class="form-control" id="wiz-juniper_mx-group-name" value="SOC_BLOCKLIST" placeholder="SOC_BLOCKLIST">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Block Method</label>
+                            <select class="form-select" id="wiz-juniper_mx-block-method">
+                                <option value="address_group" selected>Address Group</option>
+                                <option value="null_route">Null Route</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Check Point fields -->
+                    <div id="wiz-checkpoint-fields" style="display:none">
+                        <div class="row g-3">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label small fw-semibold">API Port</label>
+                                <input type="number" class="form-control" id="wiz-checkpoint-port" value="443">
+                            </div>
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label small fw-semibold">Username <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-checkpoint-username" placeholder="admin">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Password <span class="text-danger">*</span></label>
+                            <input type="password" class="form-control" id="wiz-checkpoint-password">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Domain <small class="text-body-secondary">(optional, for multi-domain)</small></label>
+                            <input type="text" class="form-control" id="wiz-checkpoint-domain" placeholder="">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Object Group Name</label>
+                            <input type="text" class="form-control" id="wiz-checkpoint-group-name" value="SOC_BLOCKLIST" placeholder="SOC_BLOCKLIST">
+                        </div>
+                    </div>
+
+                    <!-- AWS WAF fields -->
+                    <div id="wiz-aws_waf-fields" style="display:none">
+                        <div class="row g-3">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Access Key <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-aws_waf-access-key" placeholder="AKIA...">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Secret Access Key <span class="text-danger">*</span></label>
+                                <input type="password" class="form-control" id="wiz-aws_waf-secret-key">
+                            </div>
+                        </div>
+                        <div class="row g-3">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Region <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-aws_waf-region" placeholder="us-east-1">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">IP Set Name <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-aws_waf-ip-set-name" placeholder="soc-blocklist">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">IP Set Scope <span class="text-danger">*</span></label>
+                            <select class="form-select" id="wiz-aws_waf-ip-set-scope">
+                                <option value="REGIONAL" selected>REGIONAL</option>
+                                <option value="CLOUDFRONT">CLOUDFRONT</option>
+                            </select>
+                        </div>
+                        <div class="row g-3">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">IPv4 IP Set Name</label>
+                                <input type="text" class="form-control" id="wiz-aws_waf-ipv4-ip-set-name" placeholder="SOC_BLOCKLIST-ipv4">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">IPv6 IP Set Name</label>
+                                <input type="text" class="form-control" id="wiz-aws_waf-ipv6-ip-set-name" placeholder="SOC_BLOCKLIST-ipv6">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Azure NSG fields -->
+                    <div id="wiz-azure_nsg-fields" style="display:none">
+                        <div class="row g-3">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Tenant ID <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-azure_nsg-tenant-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Client ID <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-azure_nsg-client-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Client Secret <span class="text-danger">*</span></label>
+                            <input type="password" class="form-control" id="wiz-azure_nsg-client-secret">
+                        </div>
+                        <div class="row g-3">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Subscription ID <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-azure_nsg-subscription-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Resource Group <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-azure_nsg-resource-group" placeholder="my-resource-group">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">NSG Name <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="wiz-azure_nsg-nsg-name" placeholder="my-nsg">
+                        </div>
+                    </div>
+
+                    <!-- GCP Firewall fields -->
+                    <div id="wiz-gcp_firewall-fields" style="display:none">
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">Service Account JSON <span class="text-danger">*</span></label>
+                            <textarea class="form-control" id="wiz-gcp_firewall-service-account-json" rows="6"
+                                      style="font-family:'Courier New',Courier,monospace;font-size:0.8rem"
+                                      placeholder='{"type": "service_account", ...}'></textarea>
+                        </div>
+                        <div class="row g-3">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Project ID <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-gcp_firewall-project-id" placeholder="my-project-id">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">VPC Network Name <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-gcp_firewall-network-name" placeholder="default">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- OCI NSG fields -->
+                    <div id="wiz-oci_nsg-fields" style="display:none">
+                        <div class="row g-3">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">Tenancy OCID <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-oci_nsg-tenancy-ocid" placeholder="ocid1.tenancy.oc1..aaa...">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small fw-semibold">User OCID <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-oci_nsg-user-ocid" placeholder="ocid1.user.oc1..aaa...">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small fw-semibold">API Signing Key (PEM) <span class="text-danger">*</span></label>
+                            <textarea class="form-control" id="wiz-oci_nsg-api-key-pem" rows="6"
+                                      style="font-family:'Courier New',Courier,monospace;font-size:0.8rem"
+                                      placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"></textarea>
+                        </div>
+                        <div class="row g-3">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label small fw-semibold">Key Fingerprint <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-oci_nsg-fingerprint" placeholder="aa:bb:cc:...">
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label small fw-semibold">Region <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-oci_nsg-region" placeholder="us-ashburn-1">
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label small fw-semibold">NSG OCID <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="wiz-oci_nsg-nsg-ocid" placeholder="ocid1.networksecuritygroup.oc1..aaa...">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 3: Validate & Save -->
+                <div id="wizard-step-3" style="display:none">
+                    <div class="mb-4">
+                        <h6 class="mb-3">Connectivity Test</h6>
+                        <div id="wiz-test-status" class="d-flex align-items-center p-3 rounded" style="background:rgba(255,255,255,0.03)">
+                            <span class="spinner-border spinner-border-sm me-2" id="wiz-test-spinner"></span>
+                            <span id="wiz-test-text">Testing connection...</span>
+                            <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" id="wiz-retest-btn" style="display:none">
+                                <i class="bi bi-arrow-repeat me-1"></i>Retest
+                            </button>
+                        </div>
+                    </div>
+                    <div id="wiz-setup-options" style="display:none">
+                        <h6 class="mb-3">Setup Options</h6>
+                        <div id="wiz-floating-rule-option" style="display:none" class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox" id="wiz-create-floating" checked>
+                            <label class="form-check-label" for="wiz-create-floating">Create floating rules now</label>
+                        </div>
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" id="wiz-sync-blocklist" checked>
+                            <label class="form-check-label" for="wiz-sync-blocklist">Sync existing blocklist to this device</label>
+                        </div>
+                    </div>
+                    <div id="wiz-setup-result" class="mt-3"></div>
+                </div>
+            </div>
+            <div class="modal-footer border-top border-opacity-10">
+                <button type="button" class="btn btn-secondary" id="wiz-back-btn" style="display:none">
+                    <i class="bi bi-arrow-left me-1"></i>Back
+                </button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="wiz-next-btn" disabled>
+                    Next <i class="bi bi-arrow-right ms-1"></i>
+                </button>
+                <button type="button" class="btn btn-success" id="wiz-finish-btn" style="display:none" disabled>
+                    <i class="bi bi-check-lg me-1"></i>Save Device
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Device Modals (per-device, rendered outside grid to avoid z-index issues) -->
+{% for device in devices %}
+<div class="modal fade" id="editModal{{ device.id }}" tabindex="-1" aria-labelledby="editModalLabel{{ device.id }}" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('devices.edit_device', device_id=device.id) }}">
+                <div class="modal-header border-bottom border-opacity-10">
+                    <h5 class="modal-title fw-semibold" id="editModalLabel{{ device.id }}">
+                        <i class="bi bi-pencil-square me-2"></i>Edit {{ device.friendly_name or device.hostname }}
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Friendly Name</label>
+                        <input type="text" class="form-control" name="friendly_name" value="{{ device.friendly_name or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Hostname</label>
+                        <input type="text" class="form-control" name="hostname" value="{{ device.hostname }}">
+                    </div>
+                    {% if device.device_type == 'pfsense' %}
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Username</label>
+                        <input type="text" class="form-control" name="web_username" value="{{ device.web_username or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Password</label>
+                        <input type="password" class="form-control" name="web_password" placeholder="Leave blank to keep current">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Block Method</label>
+                        <select class="form-select block-method-select" name="block_method" data-device-id="{{ device.id }}" data-current-method="{{ device.block_method or 'null_route' }}">
+                            <option value="null_route" {% if device.block_method == 'null_route' %}selected{% endif %}>Null Route</option>
+                            <option value="floating_rule" {% if device.block_method == 'floating_rule' %}selected{% endif %}>Floating Rule</option>
+                        </select>
+                        <div class="switch-warning" id="switch-warning-{{ device.id }}" style="display:none">
+                            <div class="form-text text-warning mb-2">
+                                <i class="bi bi-exclamation-triangle me-1"></i>
+                                Changing block method will set up new rules on the firewall.
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input cleanup-old-check" type="checkbox" id="cleanup-old-{{ device.id }}" data-device-id="{{ device.id }}" checked>
+                                <label class="form-check-label small" for="cleanup-old-{{ device.id }}" id="cleanup-label-{{ device.id }}">
+                                    Remove old rules from pfSense
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    {% elif device.device_type in ('cisco_ios', 'cisco_asa') %}
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Port</label>
+                        <input type="number" class="form-control" name="ssh_port" value="{{ device.ssh_port or 22 }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Username</label>
+                        <input type="text" class="form-control" name="ssh_username" value="{{ device.ssh_username or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Password</label>
+                        <input type="password" class="form-control" name="ssh_password" placeholder="Leave blank to keep current">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Enable Password</label>
+                        <input type="password" class="form-control" name="enable_password" placeholder="Leave blank to keep current">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">{% if device.device_type == 'cisco_ios' %}ACL Name{% else %}Object Group Name{% endif %}</label>
+                        <input type="text" class="form-control" name="group_name" value="{{ device.group_name or 'SOC_BLOCKLIST' }}">
+                    </div>
+                    {% elif device.device_type in ('juniper_srx', 'juniper_mx') %}
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Port</label>
+                        <input type="number" class="form-control" name="ssh_port" value="{{ device.ssh_port or 22 }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Username</label>
+                        <input type="text" class="form-control" name="ssh_username" value="{{ device.ssh_username or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Password</label>
+                        <input type="password" class="form-control" name="ssh_password" placeholder="Leave blank to keep current">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Address Group Name</label>
+                        <input type="text" class="form-control" name="group_name" value="{{ device.group_name or 'SOC_BLOCKLIST' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Block Method</label>
+                        <select class="form-select" name="block_method">
+                            <option value="address_group" {% if device.block_method == 'address_group' %}selected{% endif %}>Address Group</option>
+                            <option value="null_route" {% if device.block_method == 'null_route' %}selected{% endif %}>Null Route</option>
+                        </select>
+                    </div>
+                    {% elif device.device_type == 'checkpoint' %}
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">API Port</label>
+                        <input type="number" class="form-control" name="api_port" value="{{ device.api_port or 443 }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Username</label>
+                        <input type="text" class="form-control" name="ssh_username" value="{{ device.ssh_username or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Password</label>
+                        <input type="password" class="form-control" name="ssh_password" placeholder="Leave blank to keep current">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Object Group Name</label>
+                        <input type="text" class="form-control" name="group_name" value="{{ device.group_name or 'SOC_BLOCKLIST' }}">
+                    </div>
+                    {% elif device.device_type in ('fortinet', 'palo_alto') %}
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Connection Protocol</label>
+                        <select class="form-select" name="connection_protocol">
+                            <option value="ssh" {% if device.connection_protocol == 'ssh' %}selected{% endif %}>SSH</option>
+                            <option value="https" {% if device.connection_protocol == 'https' %}selected{% endif %}>HTTPS</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Port</label>
+                        <input type="number" class="form-control" name="ssh_port" value="{{ device.ssh_port or 22 }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Username</label>
+                        <input type="text" class="form-control" name="ssh_username" value="{{ device.ssh_username or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Password</label>
+                        <input type="password" class="form-control" name="ssh_password" placeholder="Leave blank to keep current">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Address Group Name</label>
+                        <input type="text" class="form-control" name="group_name" value="{{ device.group_name or 'SOC_BLOCKLIST' }}">
+                    </div>
+                    {% elif device.device_type == 'unifi' %}
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">API Port</label>
+                        <input type="number" class="form-control" name="api_port" value="{{ device.api_port or 443 }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">API Username</label>
+                        <input type="text" class="form-control" name="ssh_username" value="{{ device.ssh_username or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">API Password</label>
+                        <input type="password" class="form-control" name="ssh_password" placeholder="Leave blank to keep current">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Network List Name</label>
+                        <input type="text" class="form-control" name="group_name" value="{{ device.group_name or 'SOC_BLOCKLIST' }}">
+                    </div>
+                    {% elif device.device_type == 'aws_waf' %}
+                    <input type="hidden" name="cloud_credentials" class="cloud-creds-hidden" data-cloud-type="aws_waf">
+                    <div class="row g-3">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label small fw-semibold">Access Key</label>
+                            <input type="text" class="form-control" name="edit_aws_waf_access_key" placeholder="Leave blank to keep current">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label small fw-semibold">Secret Access Key</label>
+                            <input type="password" class="form-control" name="edit_aws_waf_secret_key" placeholder="Leave blank to keep current">
+                        </div>
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label small fw-semibold">Region</label>
+                            <input type="text" class="form-control" name="cloud_region" value="{{ device.cloud_region or '' }}">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label small fw-semibold">IP Set Name</label>
+                            <input type="text" class="form-control" name="cloud_resource_id" value="{{ device.cloud_resource_id or '' }}">
+                        </div>
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label small fw-semibold">IPv4 IP Set Name</label>
+                            <input type="text" class="form-control" name="ipv4_group_name" value="{{ device.ipv4_group_name or '' }}" placeholder="Auto-generated if blank">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label small fw-semibold">IPv6 IP Set Name</label>
+                            <input type="text" class="form-control" name="ipv6_group_name" value="{{ device.ipv6_group_name or '' }}" placeholder="Auto-generated if blank">
+                        </div>
+                    </div>
+                    {% elif device.device_type == 'azure_nsg' %}
+                    <input type="hidden" name="cloud_credentials" class="cloud-creds-hidden" data-cloud-type="azure_nsg">
+                    <div class="row g-3">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label small fw-semibold">Tenant ID</label>
+                            <input type="text" class="form-control" name="edit_azure_tenant_id" placeholder="Leave blank to keep current">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label small fw-semibold">Client ID</label>
+                            <input type="text" class="form-control" name="edit_azure_client_id" placeholder="Leave blank to keep current">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Client Secret</label>
+                        <input type="password" class="form-control" name="edit_azure_client_secret" placeholder="Leave blank to keep current">
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label small fw-semibold">Subscription ID</label>
+                            <input type="text" class="form-control" name="edit_azure_subscription_id" placeholder="Leave blank to keep current">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label small fw-semibold">Resource Group</label>
+                            <input type="text" class="form-control" name="edit_azure_resource_group" placeholder="Leave blank to keep current">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">NSG Name</label>
+                        <input type="text" class="form-control" name="cloud_resource_id" value="{{ device.cloud_resource_id or '' }}">
+                    </div>
+                    {% elif device.device_type == 'gcp_firewall' %}
+                    <input type="hidden" name="cloud_credentials" class="cloud-creds-hidden" data-cloud-type="gcp_firewall">
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Service Account JSON</label>
+                        <textarea class="form-control" name="edit_gcp_service_account_json" rows="6"
+                                  style="font-family:'Courier New',Courier,monospace;font-size:0.8rem"
+                                  placeholder="Leave blank to keep current"></textarea>
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label small fw-semibold">Project ID</label>
+                            <input type="text" class="form-control" name="cloud_resource_id" value="{{ device.cloud_resource_id or '' }}">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label small fw-semibold">VPC Network Name</label>
+                            <input type="text" class="form-control" name="edit_gcp_network_name" placeholder="Leave blank to keep current">
+                        </div>
+                    </div>
+                    {% elif device.device_type == 'oci_nsg' %}
+                    <input type="hidden" name="cloud_credentials" class="cloud-creds-hidden" data-cloud-type="oci_nsg">
+                    <div class="row g-3">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label small fw-semibold">Tenancy OCID</label>
+                            <input type="text" class="form-control" name="edit_oci_tenancy_ocid" placeholder="Leave blank to keep current">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label small fw-semibold">User OCID</label>
+                            <input type="text" class="form-control" name="edit_oci_user_ocid" placeholder="Leave blank to keep current">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">API Signing Key (PEM)</label>
+                        <textarea class="form-control" name="edit_oci_api_key_pem" rows="6"
+                                  style="font-family:'Courier New',Courier,monospace;font-size:0.8rem"
+                                  placeholder="Leave blank to keep current"></textarea>
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label small fw-semibold">Key Fingerprint</label>
+                            <input type="text" class="form-control" name="edit_oci_fingerprint" placeholder="Leave blank to keep current">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label small fw-semibold">Region</label>
+                            <input type="text" class="form-control" name="cloud_region" value="{{ device.cloud_region or '' }}">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label small fw-semibold">NSG OCID</label>
+                            <input type="text" class="form-control" name="cloud_resource_id" value="{{ device.cloud_resource_id or '' }}">
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Port</label>
+                        <input type="number" class="form-control" name="ssh_port" value="{{ device.ssh_port or 22 }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Username</label>
+                        <input type="text" class="form-control" name="ssh_username" value="{{ device.ssh_username or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Password</label>
+                        <input type="password" class="form-control" name="ssh_password" placeholder="Leave blank to keep current">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Key (paste private key)</label>
+                        <textarea class="form-control" name="ssh_key" rows="6"
+                                  style="font-family:'Courier New',Courier,monospace;font-size:0.8rem"
+                                  placeholder="Paste SSH private key content">{{ device.ssh_key or '' }}</textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">SSH Key Path</label>
+                        <input type="text" class="form-control" name="ssh_key_path" value="{{ device.ssh_key_path or '' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-semibold">Sudo Password</label>
+                        <input type="password" class="form-control" name="sudo_password" placeholder="Leave blank to use SSH password">
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="modal-footer border-top border-opacity-10">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary save-device-btn" data-device-id="{{ device.id }}">
+                        <i class="bi bi-check-lg me-1"></i>Save Changes
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endfor %}
+
+<!-- Remove Device Confirmation Modals (per-device) -->
+{% for device in devices %}
+<div class="modal fade" id="removeModal{{ device.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <div class="modal-header border-bottom border-opacity-10">
+                <h5 class="modal-title fw-semibold">
+                    <i class="bi bi-trash text-danger me-2"></i>Remove Device
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-3">Remove <strong>{{ device.friendly_name or device.hostname }}</strong>?</p>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="cleanup-device-{{ device.id }}" checked>
+                    <label class="form-check-label small" for="cleanup-device-{{ device.id }}">
+                        {% if device.device_type == 'pfsense' and device.block_method == 'floating_rule' %}
+                        Remove floating rules and alias from device
+                        {% elif device.device_type == 'linux' %}
+                        Remove null routes from device
+                        {% elif device.device_type == 'cisco_ios' %}
+                        Remove ACL entries from device
+                        {% elif device.device_type == 'cisco_asa' %}
+                        Remove object group entries from device
+                        {% elif device.device_type == 'fortinet' %}
+                        Remove address objects and group from device
+                        {% elif device.device_type == 'palo_alto' %}
+                        Remove address objects and group from device
+                        {% elif device.device_type == 'unifi' %}
+                        Remove Network List from controller
+                        {% elif device.device_type == 'juniper_srx' %}
+                        Remove address entries from device
+                        {% elif device.device_type == 'juniper_mx' %}
+                        Remove prefix-list entries from device
+                        {% elif device.device_type == 'checkpoint' %}
+                        Remove host objects from Check Point
+                        {% elif device.device_type in ('aws_waf', 'azure_nsg', 'gcp_firewall', 'oci_nsg') %}
+                        Remove cloud security rules from provider
+                        {% else %}
+                        Remove null routes from device
+                        {% endif %}
+                    </label>
+                </div>
+                <div id="remove-result-{{ device.id }}" class="mt-2"></div>
+            </div>
+            <div class="modal-footer border-top border-opacity-10">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger btn-sm confirm-remove-btn" data-device-id="{{ device.id }}">
+                    <i class="bi bi-trash me-1"></i>Remove
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endfor %}
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function() {
+    // === Add Device Wizard ===
+    var wizStep = 1;
+    var wizDeviceType = '';
+    var wizDeviceId = null;
+    var wizCredentialsValidated = false;
+    var wizDeviceAdded = false;
+
+    var step1 = document.getElementById('wizard-step-1');
+    var step2 = document.getElementById('wizard-step-2');
+    var step3 = document.getElementById('wizard-step-3');
+    var nextBtn = document.getElementById('wiz-next-btn');
+    var backBtn = document.getElementById('wiz-back-btn');
+    var finishBtn = document.getElementById('wiz-finish-btn');
+
+    function wizShowStep(n) {
+        wizStep = n;
+        step1.style.display = n === 1 ? '' : 'none';
+        step2.style.display = n === 2 ? '' : 'none';
+        step3.style.display = n === 3 ? '' : 'none';
+        backBtn.style.display = n > 1 ? '' : 'none';
+        nextBtn.style.display = n < 3 ? '' : 'none';
+        finishBtn.style.display = n === 3 ? '' : 'none';
+
+        for (var i = 1; i <= 3; i++) {
+            var badge = document.getElementById('step-badge-' + i);
+            var label = document.getElementById('step-label-' + i);
+            if (i <= n) {
+                badge.className = 'badge rounded-pill bg-primary wizard-step-badge';
+                label.className = 'small ms-1 me-3 wizard-step-label';
+            } else {
+                badge.className = 'badge rounded-pill bg-secondary wizard-step-badge';
+                label.className = 'small ms-1 me-3 wizard-step-label text-muted';
+            }
+        }
+    }
+
+    // Step 1: Type selection
+    document.querySelectorAll('.wizard-type-card').forEach(function(card) {
+        card.addEventListener('click', function() {
+            document.querySelectorAll('.wizard-type-card').forEach(function(c) {
+                c.style.borderColor = 'transparent';
+            });
+            this.style.borderColor = '#6366f1';
+            wizDeviceType = this.getAttribute('data-type');
+            nextBtn.disabled = false;
+        });
+    });
+
+    nextBtn.addEventListener('click', function() {
+        if (wizStep === 1 && wizDeviceType) {
+            // Show appropriate fields for step 2
+            var allFieldDivs = ['wiz-pfsense-fields', 'wiz-linux-fields', 'wiz-cisco_ios-fields', 'wiz-cisco_asa-fields', 'wiz-fortinet-fields', 'wiz-palo_alto-fields', 'wiz-unifi-fields', 'wiz-juniper_srx-fields', 'wiz-juniper_mx-fields', 'wiz-checkpoint-fields', 'wiz-aws_waf-fields', 'wiz-azure_nsg-fields', 'wiz-gcp_firewall-fields', 'wiz-oci_nsg-fields'];
+            allFieldDivs.forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) el.style.display = 'none';
+            });
+            var targetFields = document.getElementById('wiz-' + wizDeviceType + '-fields');
+            if (targetFields) targetFields.style.display = '';
+            // Hide hostname field for cloud device types
+            var cloudTypes = ['aws_waf', 'azure_nsg', 'gcp_firewall', 'oci_nsg'];
+            var hostnameGroup = document.getElementById('wiz-hostname-group');
+            var friendlyInput = document.getElementById('wiz-friendly-name');
+            if (cloudTypes.indexOf(wizDeviceType) !== -1) {
+                hostnameGroup.style.display = 'none';
+                friendlyInput.placeholder = 'e.g. Dev VPC ' + wizDeviceType.replace(/_/g, ' ').toUpperCase();
+            } else {
+                hostnameGroup.style.display = '';
+                friendlyInput.placeholder = 'e.g. Main Firewall';
+            }
+            wizShowStep(2);
+            nextBtn.disabled = false;
+        } else if (wizStep === 2) {
+            // Validate step 2 fields
+            var friendlyName = document.getElementById('wiz-friendly-name').value.trim();
+            var hostname = document.getElementById('wiz-hostname').value.trim();
+            var isCloudType = ['aws_waf', 'azure_nsg', 'gcp_firewall', 'oci_nsg'].indexOf(wizDeviceType) !== -1;
+            if (!friendlyName || (!isCloudType && !hostname)) {
+                alert(isCloudType ? 'Friendly Name is required.' : 'Friendly Name and Hostname are required.');
+                return;
+            }
+            if (wizDeviceType === 'pfsense') {
+                if (!document.getElementById('wiz-pf-username').value.trim() || !document.getElementById('wiz-pf-password').value.trim()) {
+                    alert('Username and Password are required for pfSense.');
+                    return;
+                }
+            } else if (wizDeviceType === 'linux') {
+                if (!document.getElementById('wiz-linux-username').value.trim()) {
+                    alert('SSH Username is required for Linux.');
+                    return;
+                }
+            } else if (wizDeviceType === 'cisco_ios' || wizDeviceType === 'cisco_asa') {
+                if (!document.getElementById('wiz-' + wizDeviceType + '-username').value.trim() ||
+                    !document.getElementById('wiz-' + wizDeviceType + '-password').value.trim() ||
+                    !document.getElementById('wiz-' + wizDeviceType + '-enable-password').value.trim()) {
+                    alert('SSH Username, SSH Password, and Enable Password are required.');
+                    return;
+                }
+            } else if (wizDeviceType === 'fortinet' || wizDeviceType === 'palo_alto') {
+                var protocol = document.getElementById('wiz-' + wizDeviceType + '-protocol').value;
+                if (protocol === 'https') {
+                    if (!document.getElementById('wiz-' + wizDeviceType + '-api-key').value.trim()) {
+                        alert('API Key is required for HTTPS connection.');
+                        return;
+                    }
+                } else {
+                    if (!document.getElementById('wiz-' + wizDeviceType + '-username').value.trim() ||
+                        !document.getElementById('wiz-' + wizDeviceType + '-password').value.trim()) {
+                        alert('SSH Username and SSH Password are required.');
+                        return;
+                    }
+                }
+            } else if (wizDeviceType === 'unifi') {
+                if (!document.getElementById('wiz-unifi-username').value.trim() ||
+                    !document.getElementById('wiz-unifi-password').value.trim()) {
+                    alert('API Username and API Password are required.');
+                    return;
+                }
+            } else if (wizDeviceType === 'aws_waf') {
+                if (!document.getElementById('wiz-aws_waf-access-key').value.trim() ||
+                    !document.getElementById('wiz-aws_waf-secret-key').value.trim() ||
+                    !document.getElementById('wiz-aws_waf-region').value.trim() ||
+                    !document.getElementById('wiz-aws_waf-ip-set-name').value.trim()) {
+                    alert('Access Key, Secret Access Key, Region, and IP Set Name are required.');
+                    return;
+                }
+            } else if (wizDeviceType === 'azure_nsg') {
+                if (!document.getElementById('wiz-azure_nsg-tenant-id').value.trim() ||
+                    !document.getElementById('wiz-azure_nsg-client-id').value.trim() ||
+                    !document.getElementById('wiz-azure_nsg-client-secret').value.trim() ||
+                    !document.getElementById('wiz-azure_nsg-subscription-id').value.trim() ||
+                    !document.getElementById('wiz-azure_nsg-resource-group').value.trim() ||
+                    !document.getElementById('wiz-azure_nsg-nsg-name').value.trim()) {
+                    alert('All Azure NSG fields are required.');
+                    return;
+                }
+            } else if (wizDeviceType === 'gcp_firewall') {
+                if (!document.getElementById('wiz-gcp_firewall-service-account-json').value.trim() ||
+                    !document.getElementById('wiz-gcp_firewall-project-id').value.trim() ||
+                    !document.getElementById('wiz-gcp_firewall-network-name').value.trim()) {
+                    alert('Service Account JSON, Project ID, and VPC Network Name are required.');
+                    return;
+                }
+            } else if (wizDeviceType === 'oci_nsg') {
+                if (!document.getElementById('wiz-oci_nsg-tenancy-ocid').value.trim() ||
+                    !document.getElementById('wiz-oci_nsg-user-ocid').value.trim() ||
+                    !document.getElementById('wiz-oci_nsg-api-key-pem').value.trim() ||
+                    !document.getElementById('wiz-oci_nsg-fingerprint').value.trim() ||
+                    !document.getElementById('wiz-oci_nsg-region').value.trim() ||
+                    !document.getElementById('wiz-oci_nsg-nsg-ocid').value.trim()) {
+                    alert('All OCI NSG fields are required.');
+                    return;
+                }
+            } else if (wizDeviceType === 'juniper_srx' || wizDeviceType === 'juniper_mx') {
+                if (!document.getElementById('wiz-' + wizDeviceType + '-username').value.trim() ||
+                    !document.getElementById('wiz-' + wizDeviceType + '-password').value.trim()) {
+                    alert('SSH Username and SSH Password are required.');
+                    return;
+                }
+            } else if (wizDeviceType === 'checkpoint') {
+                if (!document.getElementById('wiz-checkpoint-username').value.trim() ||
+                    !document.getElementById('wiz-checkpoint-password').value.trim()) {
+                    alert('Username and Password are required.');
+                    return;
+                }
+            }
+
+            // Move to step 3 and run credential validation
+            wizShowStep(3);
+            if (!wizCredentialsValidated) {
+                wizRunValidation();
+            }
+        }
+    });
+
+    backBtn.addEventListener('click', function() {
+        if (wizStep === 2) {
+            wizShowStep(1);
+            nextBtn.disabled = !wizDeviceType;
+        } else if (wizStep === 3) {
+            wizShowStep(2);
+            nextBtn.disabled = false;
+        }
+    });
+
+    function wizBuildPayload() {
+        var isCloudType = ['aws_waf', 'azure_nsg', 'gcp_firewall', 'oci_nsg'].indexOf(wizDeviceType) !== -1;
+        var hostname = isCloudType
+            ? document.getElementById('wiz-friendly-name').value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+            : document.getElementById('wiz-hostname').value.trim();
+        var payload = {
+            device_type: wizDeviceType,
+            hostname: hostname
+        };
+        if (wizDeviceType === 'pfsense') {
+            payload.username = document.getElementById('wiz-pf-username').value.trim();
+            payload.password = document.getElementById('wiz-pf-password').value.trim();
+        } else if (wizDeviceType === 'linux') {
+            payload.username = document.getElementById('wiz-linux-username').value.trim();
+            payload.password = document.getElementById('wiz-linux-password').value || null;
+            payload.ssh_key = document.getElementById('wiz-linux-ssh-key').value || null;
+            payload.port = parseInt(document.getElementById('wiz-linux-port').value) || 22;
+        } else if (wizDeviceType === 'cisco_ios' || wizDeviceType === 'cisco_asa') {
+            payload.ssh_port = parseInt(document.getElementById('wiz-' + wizDeviceType + '-port').value) || 22;
+            payload.ssh_username = document.getElementById('wiz-' + wizDeviceType + '-username').value.trim();
+            payload.ssh_password = document.getElementById('wiz-' + wizDeviceType + '-password').value.trim();
+            payload.enable_password = document.getElementById('wiz-' + wizDeviceType + '-enable-password').value.trim();
+            payload.group_name = document.getElementById('wiz-' + wizDeviceType + '-group-name').value.trim() || 'SOC_BLOCKLIST';
+        } else if (wizDeviceType === 'fortinet' || wizDeviceType === 'palo_alto') {
+            var protocol = document.getElementById('wiz-' + wizDeviceType + '-protocol').value;
+            payload.connection_protocol = protocol;
+            if (protocol === 'https') {
+                payload.api_port = parseInt(document.getElementById('wiz-' + wizDeviceType + '-api-port').value) || 443;
+                payload.api_key = document.getElementById('wiz-' + wizDeviceType + '-api-key').value.trim();
+            } else {
+                payload.ssh_port = parseInt(document.getElementById('wiz-' + wizDeviceType + '-port').value) || 22;
+                payload.ssh_username = document.getElementById('wiz-' + wizDeviceType + '-username').value.trim();
+                payload.ssh_password = document.getElementById('wiz-' + wizDeviceType + '-password').value.trim();
+            }
+            payload.group_name = document.getElementById('wiz-' + wizDeviceType + '-group-name').value.trim() || 'SOC_BLOCKLIST';
+        } else if (wizDeviceType === 'unifi') {
+            payload.api_port = parseInt(document.getElementById('wiz-unifi-port').value) || 443;
+            payload.ssh_username = document.getElementById('wiz-unifi-username').value.trim();
+            payload.ssh_password = document.getElementById('wiz-unifi-password').value.trim();
+            payload.group_name = document.getElementById('wiz-unifi-group-name').value.trim() || 'SOC_BLOCKLIST';
+        } else if (wizDeviceType === 'juniper_srx' || wizDeviceType === 'juniper_mx') {
+            payload.ssh_port = parseInt(document.getElementById('wiz-' + wizDeviceType + '-port').value) || 22;
+            payload.ssh_username = document.getElementById('wiz-' + wizDeviceType + '-username').value.trim();
+            payload.ssh_password = document.getElementById('wiz-' + wizDeviceType + '-password').value.trim();
+            payload.group_name = document.getElementById('wiz-' + wizDeviceType + '-group-name').value.trim() || 'SOC_BLOCKLIST';
+            payload.block_method = document.getElementById('wiz-' + wizDeviceType + '-block-method').value;
+        } else if (wizDeviceType === 'checkpoint') {
+            payload.api_port = parseInt(document.getElementById('wiz-checkpoint-port').value) || 443;
+            payload.ssh_username = document.getElementById('wiz-checkpoint-username').value.trim();
+            payload.ssh_password = document.getElementById('wiz-checkpoint-password').value.trim();
+            payload.domain = document.getElementById('wiz-checkpoint-domain').value.trim();
+            payload.group_name = document.getElementById('wiz-checkpoint-group-name').value.trim() || 'SOC_BLOCKLIST';
+        } else if (wizDeviceType === 'aws_waf') {
+            payload.access_key = document.getElementById('wiz-aws_waf-access-key').value.trim();
+            payload.secret_key = document.getElementById('wiz-aws_waf-secret-key').value.trim();
+            payload.region = document.getElementById('wiz-aws_waf-region').value.trim();
+            payload.ip_set_name = document.getElementById('wiz-aws_waf-ip-set-name').value.trim();
+            payload.ip_set_scope = document.getElementById('wiz-aws_waf-ip-set-scope').value;
+            payload.ipv4_ip_set_name = document.getElementById('wiz-aws_waf-ipv4-ip-set-name').value.trim();
+            payload.ipv6_ip_set_name = document.getElementById('wiz-aws_waf-ipv6-ip-set-name').value.trim();
+        } else if (wizDeviceType === 'azure_nsg') {
+            payload.tenant_id = document.getElementById('wiz-azure_nsg-tenant-id').value.trim();
+            payload.client_id = document.getElementById('wiz-azure_nsg-client-id').value.trim();
+            payload.client_secret = document.getElementById('wiz-azure_nsg-client-secret').value.trim();
+            payload.subscription_id = document.getElementById('wiz-azure_nsg-subscription-id').value.trim();
+            payload.resource_group = document.getElementById('wiz-azure_nsg-resource-group').value.trim();
+            payload.nsg_name = document.getElementById('wiz-azure_nsg-nsg-name').value.trim();
+        } else if (wizDeviceType === 'gcp_firewall') {
+            payload.service_account_json = document.getElementById('wiz-gcp_firewall-service-account-json').value.trim();
+            payload.project_id = document.getElementById('wiz-gcp_firewall-project-id').value.trim();
+            payload.network_name = document.getElementById('wiz-gcp_firewall-network-name').value.trim();
+        } else if (wizDeviceType === 'oci_nsg') {
+            payload.tenancy_ocid = document.getElementById('wiz-oci_nsg-tenancy-ocid').value.trim();
+            payload.user_ocid = document.getElementById('wiz-oci_nsg-user-ocid').value.trim();
+            payload.api_key_pem = document.getElementById('wiz-oci_nsg-api-key-pem').value.trim();
+            payload.fingerprint = document.getElementById('wiz-oci_nsg-fingerprint').value.trim();
+            payload.region = document.getElementById('wiz-oci_nsg-region').value.trim();
+            payload.nsg_ocid = document.getElementById('wiz-oci_nsg-nsg-ocid').value.trim();
+        }
+        return payload;
+    }
+
+    function wizRunValidation() {
+        var spinner = document.getElementById('wiz-test-spinner');
+        var text = document.getElementById('wiz-test-text');
+        var setupOpts = document.getElementById('wiz-setup-options');
+        var floatingOpt = document.getElementById('wiz-floating-rule-option');
+
+        spinner.style.display = '';
+        text.textContent = 'Validating credentials...';
+        text.className = '';
+        setupOpts.style.display = 'none';
+        finishBtn.disabled = true;
+
+        var payload = wizBuildPayload();
+
+        fetch("{{ url_for('devices.validate_credentials') }}", {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        })
+        .then(function(resp) { return resp.json(); })
+        .then(function(data) {
+            spinner.style.display = 'none';
+            if (data.success) {
+                text.innerHTML = '<i class="bi bi-check-circle-fill text-success me-2"></i>' + data.message;
+                setupOpts.style.display = '';
+                finishBtn.disabled = false;
+                if (wizDeviceType === 'pfsense' && document.getElementById('wiz-pf-block-method').value === 'floating_rule') {
+                    floatingOpt.style.display = '';
+                } else {
+                    floatingOpt.style.display = 'none';
+                }
+            } else {
+                text.innerHTML = '<i class="bi bi-x-circle-fill text-danger me-2"></i>' + data.message;
+                setupOpts.style.display = '';
+                finishBtn.disabled = true;
+            }
+            document.getElementById('wiz-retest-btn').style.display = '';
+            wizCredentialsValidated = true;
+        })
+        .catch(function() {
+            spinner.style.display = 'none';
+            text.innerHTML = '<i class="bi bi-x-circle-fill text-danger me-2"></i>Credential validation request failed.';
+            document.getElementById('wiz-retest-btn').style.display = '';
+            finishBtn.disabled = true;
+            wizCredentialsValidated = true;
+        });
+    }
+
+    document.getElementById('wiz-retest-btn').addEventListener('click', function() {
+        wizCredentialsValidated = false;
+        this.style.display = 'none';
+        finishBtn.disabled = true;
+        wizRunValidation();
+    });
+
+    finishBtn.addEventListener('click', function() {
+        // If device already added, just reload
+        if (wizDeviceAdded) {
+            location.reload();
+            return;
+        }
+
+        var createFloating = document.getElementById('wiz-create-floating').checked;
+        var syncBlocklist = document.getElementById('wiz-sync-blocklist').checked;
+        var resultDiv = document.getElementById('wiz-setup-result');
+
+        finishBtn.disabled = true;
+        finishBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Adding device...';
+        resultDiv.innerHTML = '';
+
+        // Build payload to add the device
+        var payload = wizBuildPayload();
+        payload.friendly_name = document.getElementById('wiz-friendly-name').value.trim();
+        if (wizDeviceType === 'pfsense') {
+            payload.block_method = document.getElementById('wiz-pf-block-method').value;
+        } else if (wizDeviceType === 'linux') {
+            payload.sudo_password = document.getElementById('wiz-linux-sudo-password').value || '';
+        }
+
+        // Add the device via /devices/add-json
+        fetch("{{ url_for('devices.add_device_json') }}", {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        })
+        .then(function(resp) { return resp.json(); })
+        .then(function(data) {
+            if (!data.success) {
+                resultDiv.innerHTML = '<div class="text-danger">' + data.message + '</div>';
+                finishBtn.disabled = false;
+                finishBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Save Device';
+                return;
+            }
+
+            wizDeviceId = data.device_id;
+            wizDeviceAdded = true;
+
+            // Run setup if options selected
+            if (!createFloating && !syncBlocklist) {
+                resultDiv.innerHTML = '<div class="text-success"><i class="bi bi-check-circle-fill me-2"></i>Device added successfully.</div>';
+                finishBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Done';
+                finishBtn.disabled = false;
+                return;
+            }
+
+            finishBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Setting up...';
+
+            fetch("{{ url_for('settings.setup_device', device_id=0) }}".replace('/0', '/' + wizDeviceId), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    create_floating_rules: createFloating,
+                    sync_blocklist: syncBlocklist
+                })
+            })
+            .then(function(resp) { return resp.json(); })
+            .then(function(setupData) {
+                var html = '<div class="mb-2 text-success"><i class="bi bi-check-circle-fill me-2"></i>Device added.</div>';
+                if (setupData.steps) {
+                    setupData.steps.forEach(function(s) {
+                        var icon = s.success ? '<i class="bi bi-check-circle-fill text-success me-2"></i>' : '<i class="bi bi-x-circle-fill text-danger me-2"></i>';
+                        html += '<div class="mb-1">' + icon + '<strong>' + s.step + ':</strong> ' + s.message + '</div>';
+                    });
+                }
+                html += '<div class="mt-2 text-' + (setupData.success ? 'success' : 'warning') + '">' + setupData.message + '</div>';
+                resultDiv.innerHTML = html;
+                finishBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Done';
+                finishBtn.disabled = false;
+            })
+            .catch(function() {
+                resultDiv.innerHTML = '<div class="text-success mb-2"><i class="bi bi-check-circle-fill me-2"></i>Device added.</div><div class="text-danger">Setup request failed.</div>';
+                finishBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Close';
+                finishBtn.disabled = false;
+            });
+        })
+        .catch(function() {
+            resultDiv.innerHTML = '<div class="text-danger">Failed to add device.</div>';
+            finishBtn.disabled = false;
+            finishBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Save Device';
+        });
+    });
+
+    // Reset wizard when modal is closed
+    var wizardModal = document.getElementById('addDeviceModal');
+    if (wizardModal) {
+        wizardModal.addEventListener('hidden.bs.modal', function() {
+            wizStep = 1;
+            wizDeviceType = '';
+            wizDeviceId = null;
+            wizCredentialsValidated = false;
+            wizDeviceAdded = false;
+            wizShowStep(1);
+            nextBtn.disabled = true;
+            nextBtn.innerHTML = 'Next <i class="bi bi-arrow-right ms-1"></i>';
+            finishBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Save Device';
+            finishBtn.disabled = true;
+            document.querySelectorAll('.wizard-type-card').forEach(function(c) {
+                c.style.borderColor = 'transparent';
+            });
+            // Clear form fields
+            document.getElementById('wiz-friendly-name').value = '';
+            document.getElementById('wiz-hostname').value = '';
+            document.getElementById('wiz-pf-username').value = '';
+            document.getElementById('wiz-pf-password').value = '';
+            document.getElementById('wiz-pf-block-method').value = 'floating_rule';
+            document.getElementById('wiz-linux-port').value = '22';
+            document.getElementById('wiz-linux-username').value = '';
+            document.getElementById('wiz-linux-ssh-key').value = '';
+            document.getElementById('wiz-linux-password').value = '';
+            document.getElementById('wiz-linux-sudo-password').value = '';
+            // Clear network device type fields
+            ['cisco_ios', 'cisco_asa', 'fortinet', 'palo_alto', 'unifi', 'juniper_srx', 'juniper_mx'].forEach(function(dt) {
+                var portEl = document.getElementById('wiz-' + dt + '-port');
+                if (portEl) portEl.value = dt === 'unifi' ? '443' : '22';
+                var usernameEl = document.getElementById('wiz-' + dt + '-username');
+                if (usernameEl) usernameEl.value = '';
+                var passwordEl = document.getElementById('wiz-' + dt + '-password');
+                if (passwordEl) passwordEl.value = '';
+                var enableEl = document.getElementById('wiz-' + dt + '-enable-password');
+                if (enableEl) enableEl.value = '';
+                var groupEl = document.getElementById('wiz-' + dt + '-group-name');
+                if (groupEl) groupEl.value = 'SOC_BLOCKLIST';
+            });
+            // Clear cloud provider fields
+            var cloudFieldIds = [
+                'wiz-aws_waf-access-key', 'wiz-aws_waf-secret-key', 'wiz-aws_waf-region', 'wiz-aws_waf-ip-set-name',
+                'wiz-aws_waf-ipv4-ip-set-name', 'wiz-aws_waf-ipv6-ip-set-name',
+                'wiz-azure_nsg-tenant-id', 'wiz-azure_nsg-client-id', 'wiz-azure_nsg-client-secret',
+                'wiz-azure_nsg-subscription-id', 'wiz-azure_nsg-resource-group', 'wiz-azure_nsg-nsg-name',
+                'wiz-gcp_firewall-project-id', 'wiz-gcp_firewall-network-name',
+                'wiz-oci_nsg-tenancy-ocid', 'wiz-oci_nsg-user-ocid', 'wiz-oci_nsg-fingerprint',
+                'wiz-oci_nsg-region', 'wiz-oci_nsg-nsg-ocid'
+            ];
+            cloudFieldIds.forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+            // Clear cloud textareas
+            var cloudTextareaIds = ['wiz-gcp_firewall-service-account-json', 'wiz-oci_nsg-api-key-pem'];
+            cloudTextareaIds.forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+            // Reset cloud select
+            var scopeEl = document.getElementById('wiz-aws_waf-ip-set-scope');
+            if (scopeEl) scopeEl.value = 'REGIONAL';
+            // Clear checkpoint fields
+            var cpFields = ['wiz-checkpoint-port', 'wiz-checkpoint-username', 'wiz-checkpoint-password', 'wiz-checkpoint-domain', 'wiz-checkpoint-group-name'];
+            cpFields.forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) el.value = id === 'wiz-checkpoint-port' ? '443' : (id === 'wiz-checkpoint-group-name' ? 'SOC_BLOCKLIST' : '');
+            });
+            // Clear Fortinet/Palo Alto HTTPS fields
+            ['fortinet', 'palo_alto'].forEach(function(dt) {
+                var protocolEl = document.getElementById('wiz-' + dt + '-protocol');
+                if (protocolEl) protocolEl.value = 'https';
+                var apiPortEl = document.getElementById('wiz-' + dt + '-api-port');
+                if (apiPortEl) apiPortEl.value = '443';
+                var apiKeyEl = document.getElementById('wiz-' + dt + '-api-key');
+                if (apiKeyEl) apiKeyEl.value = '';
+            });
+            // Reset protocol toggle visibility
+            if (typeof window.toggleFortinetProtocol === 'function') window.toggleFortinetProtocol();
+            if (typeof window.togglePaloAltoProtocol === 'function') window.togglePaloAltoProtocol();
+            // Clear AWS WAF dual IP set fields
+            var awsDualFields = ['wiz-aws_waf-ipv4-ip-set-name', 'wiz-aws_waf-ipv6-ip-set-name'];
+            awsDualFields.forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+            // Clear Juniper block method selects
+            ['juniper_srx', 'juniper_mx'].forEach(function(dt) {
+                var bmEl = document.getElementById('wiz-' + dt + '-block-method');
+                if (bmEl) bmEl.value = 'address_group';
+            });
+            document.getElementById('wiz-setup-result').innerHTML = '';
+            document.getElementById('wiz-test-text').textContent = 'Testing connection...';
+            document.getElementById('wiz-test-spinner').style.display = '';
+            document.getElementById('wiz-retest-btn').style.display = 'none';
+            document.getElementById('wiz-setup-options').style.display = 'none';
+        });
+    }
+
+    // === Edit Device Modal: pfSense block method switch warning ===
+    document.querySelectorAll('.block-method-select').forEach(function(sel) {
+        sel.addEventListener('change', function() {
+            var deviceId = this.getAttribute('data-device-id');
+            var currentMethod = this.getAttribute('data-current-method');
+            var warningDiv = document.getElementById('switch-warning-' + deviceId);
+            if (warningDiv) {
+                warningDiv.style.display = (this.value !== currentMethod) ? '' : 'none';
+            }
+        });
+    });
+
+    // === Test Device Connectivity ===
+    document.querySelectorAll('.device-test-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var deviceId = this.getAttribute('data-device-id');
+            var resultArea = document.getElementById('deviceResult-' + deviceId);
+            var originalHtml = this.innerHTML;
+
+            this.disabled = true;
+            this.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Testing...';
+            resultArea.style.display = '';
+            resultArea.innerHTML = '<span class="text-muted small"><i class="bi bi-hourglass-split me-1"></i>Testing connectivity...</span>';
+
+            fetch("{{ url_for('devices.test_device', device_id=0) }}".replace('/0', '/' + deviceId), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            })
+            .then(function(resp) { return resp.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    resultArea.innerHTML = '<div class="small text-success"><i class="bi bi-check-circle-fill me-1"></i>' + data.message + '</div>';
+                } else {
+                    resultArea.innerHTML = '<div class="small text-danger"><i class="bi bi-x-circle-fill me-1"></i>' + data.message + '</div>';
+                }
+                // Update the status badge on the card
+                var card = document.querySelector('.device-card[data-device-id="' + deviceId + '"]');
+                if (card && data.status) {
+                    var badge = card.querySelector('.device-status');
+                    if (badge) {
+                        var statusMap = {
+                            'online': 'badge status-badge bg-success bg-opacity-25 device-status',
+                            'offline': 'badge status-badge bg-danger bg-opacity-25 device-status',
+                            'unknown': 'badge status-badge bg-warning bg-opacity-25 device-status'
+                        };
+                        badge.className = statusMap[data.status] || statusMap['unknown'];
+                        badge.setAttribute('data-status', data.status);
+                        badge.textContent = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+                    }
+                }
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            })
+            .catch(function() {
+                resultArea.innerHTML = '<div class="small text-danger"><i class="bi bi-x-circle-fill me-1"></i>Test request failed.</div>';
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            });
+        });
+    });
+
+    // === Sync Device Blocklist ===
+    document.querySelectorAll('.device-sync-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var deviceId = this.getAttribute('data-device-id');
+            var resultArea = document.getElementById('deviceResult-' + deviceId);
+            var originalHtml = this.innerHTML;
+
+            this.disabled = true;
+            this.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Syncing...';
+            resultArea.style.display = '';
+            resultArea.innerHTML = '<span class="text-muted small"><i class="bi bi-hourglass-split me-1"></i>Syncing blocklist...</span>';
+
+            fetch('/devices/sync/' + deviceId, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            })
+            .then(function(resp) { return resp.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    resultArea.innerHTML = '<div class="small text-success"><i class="bi bi-check-circle-fill me-1"></i>' + data.message + '</div>';
+                } else {
+                    resultArea.innerHTML = '<div class="small text-danger"><i class="bi bi-x-circle-fill me-1"></i>' + data.message + '</div>';
+                }
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            })
+            .catch(function() {
+                resultArea.innerHTML = '<div class="small text-danger"><i class="bi bi-x-circle-fill me-1"></i>Sync request failed.</div>';
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            });
+        });
+    });
+
+    // === Refresh All Devices ===
+    var refreshAllBtn = document.getElementById('refreshAllBtn');
+    if (refreshAllBtn) {
+        refreshAllBtn.addEventListener('click', function() {
+            var deviceCards = document.querySelectorAll('.device-card[data-device-id]');
+            if (deviceCards.length === 0) return;
+
+            refreshAllBtn.disabled = true;
+            refreshAllBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Refreshing...';
+
+            var promises = [];
+            deviceCards.forEach(function(card) {
+                var deviceId = card.getAttribute('data-device-id');
+                var resultArea = document.getElementById('deviceResult-' + deviceId);
+                var testBtn = card.querySelector('.device-test-btn');
+                var syncBtn = card.querySelector('.device-sync-btn');
+
+                resultArea.style.display = '';
+                resultArea.innerHTML = '<span class="text-muted small"><i class="bi bi-hourglass-split me-1"></i>Refreshing...</span>';
+                if (testBtn) testBtn.disabled = true;
+                if (syncBtn) syncBtn.disabled = true;
+
+                // Run test then sync for each device independently
+                var p = fetch("{{ url_for('devices.test_device', device_id=0) }}".replace('/0', '/' + deviceId), {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                })
+                .then(function(resp) { return resp.json(); })
+                .then(function(testData) {
+                    var messages = [];
+                    if (testData.success) {
+                        messages.push('<span class="text-success"><i class="bi bi-check-circle-fill me-1"></i>Test: ' + testData.message + '</span>');
+                    } else {
+                        messages.push('<span class="text-danger"><i class="bi bi-x-circle-fill me-1"></i>Test: ' + testData.message + '</span>');
+                    }
+                    // Update status badge
+                    var badge = card.querySelector('.device-status');
+                    if (badge && testData.status) {
+                        var statusMap = {
+                            'online': 'badge status-badge bg-success bg-opacity-25 device-status',
+                            'offline': 'badge status-badge bg-danger bg-opacity-25 device-status',
+                            'unknown': 'badge status-badge bg-warning bg-opacity-25 device-status'
+                        };
+                        badge.className = statusMap[testData.status] || statusMap['unknown'];
+                        badge.setAttribute('data-status', testData.status);
+                        badge.textContent = testData.status.charAt(0).toUpperCase() + testData.status.slice(1);
+                    }
+                    // Now run sync
+                    return fetch('/devices/sync/' + deviceId, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'}
+                    })
+                    .then(function(resp) { return resp.json(); })
+                    .then(function(syncData) {
+                        if (syncData.success) {
+                            messages.push('<span class="text-success"><i class="bi bi-check-circle-fill me-1"></i>Sync: ' + syncData.message + '</span>');
+                        } else {
+                            messages.push('<span class="text-danger"><i class="bi bi-x-circle-fill me-1"></i>Sync: ' + syncData.message + '</span>');
+                        }
+                        resultArea.innerHTML = '<div class="small">' + messages.join('<br>') + '</div>';
+                    })
+                    .catch(function() {
+                        messages.push('<span class="text-danger"><i class="bi bi-x-circle-fill me-1"></i>Sync: Request failed.</span>');
+                        resultArea.innerHTML = '<div class="small">' + messages.join('<br>') + '</div>';
+                    });
+                })
+                .catch(function() {
+                    resultArea.innerHTML = '<div class="small text-danger"><i class="bi bi-x-circle-fill me-1"></i>Refresh failed for this device.</div>';
+                })
+                .finally(function() {
+                    if (testBtn) testBtn.disabled = false;
+                    if (syncBtn) syncBtn.disabled = false;
+                });
+
+                promises.push(p);
+            });
+
+            // When all devices are done, re-enable the Refresh All button
+            Promise.all(promises).finally(function() {
+                refreshAllBtn.disabled = false;
+                refreshAllBtn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Refresh All';
+            });
+        });
+    }
+
+    // === Remove Device with Cleanup ===
+    document.querySelectorAll('.confirm-remove-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var deviceId = this.getAttribute('data-device-id');
+            var cleanup = document.getElementById('cleanup-device-' + deviceId).checked;
+            var resultDiv = document.getElementById('remove-result-' + deviceId);
+
+            this.disabled = true;
+            this.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Removing...';
+            resultDiv.innerHTML = '';
+
+            fetch("{{ url_for('devices.remove_device', device_id=0) }}".replace('/0', '/' + deviceId), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({cleanup: cleanup})
+            })
+            .then(function(resp) { return resp.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    resultDiv.innerHTML = '<div class="text-success small"><i class="bi bi-check-circle me-1"></i>' + data.message + '</div>';
+                    setTimeout(function() { location.reload(); }, 1500);
+                } else {
+                    resultDiv.innerHTML = '<div class="text-danger small"><i class="bi bi-x-circle me-1"></i>' + data.message + '</div>';
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="bi bi-trash me-1"></i>Remove';
+                }
+            })
+            .catch(function() {
+                resultDiv.innerHTML = '<div class="text-danger small">Request failed.</div>';
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-trash me-1"></i>Remove';
+            });
+        });
+    });
+
+    // Protocol toggle helpers for Fortinet and Palo Alto
+    window.toggleFortinetProtocol = function() {
+        var protocol = document.getElementById('wiz-fortinet-protocol').value;
+        document.getElementById('wiz-fortinet-https-fields').style.display = protocol === 'https' ? '' : 'none';
+        document.getElementById('wiz-fortinet-ssh-fields').style.display = protocol === 'ssh' ? '' : 'none';
+    };
+    window.togglePaloAltoProtocol = function() {
+        var protocol = document.getElementById('wiz-palo_alto-protocol').value;
+        document.getElementById('wiz-palo_alto-https-fields').style.display = protocol === 'https' ? '' : 'none';
+        document.getElementById('wiz-palo_alto-ssh-fields').style.display = protocol === 'ssh' ? '' : 'none';
+    };
+
+})();
+</script>
+{% endblock %}

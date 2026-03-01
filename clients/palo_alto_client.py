@@ -1,8 +1,9 @@
-"""Palo Alto Networks firewall client for managing IP blocks via SSH.
+"""Palo Alto Networks firewall client for managing IP blocks via SSH or HTTPS.
 
-Uses Paramiko to connect via SSH and manages address objects and an
-address group containing blocked IPs. Palo Alto requires an explicit
-``commit`` command after configuration changes to apply them.
+Uses Paramiko to connect via SSH (legacy) or the PAN-OS XML API via HTTPS
+(preferred) and manages address objects and an address group containing
+blocked IPs. Palo Alto requires an explicit ``commit`` command after
+configuration changes to apply them.
 No enable mode is needed — the CLI is available after SSH authentication.
 """
 
@@ -10,6 +11,7 @@ import logging
 import time
 
 import paramiko
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -38,24 +40,33 @@ class PaloAltoClient:
     command as required by Palo Alto (Requirement 4.11).
     """
 
-    def __init__(self, host: str, port: int, username: str,
-                 password: str,
-                 address_group_name: str = "SOC_BLOCKLIST"):
-        """Initialize SSH connection parameters for Palo Alto.
+    def __init__(self, host: str, port: int = 22, username: str = "",
+                 password: str = "",
+                 address_group_name: str = "SOC_BLOCKLIST",
+                 connection_protocol: str = "ssh",
+                 api_key: str = "",
+                 api_port: int = 443):
+        """Initialize connection parameters for Palo Alto.
 
         Args:
             host: Hostname or IP of the Palo Alto firewall.
-            port: SSH port number.
-            username: SSH username.
-            password: SSH password.
+            port: SSH port number (used when connection_protocol is 'ssh').
+            username: SSH username (used when connection_protocol is 'ssh').
+            password: SSH password (used when connection_protocol is 'ssh').
             address_group_name: Name of the address group to manage
                 (default: SOC_BLOCKLIST).
+            connection_protocol: 'ssh' (existing) or 'https' (PAN-OS XML API).
+            api_key: PAN-OS API key (required when protocol is 'https').
+            api_port: HTTPS API port (default 443, used when protocol is 'https').
         """
         self.host = host
         self.port = port
         self.username = username
         self.password = password
         self.address_group_name = address_group_name
+        self.connection_protocol = connection_protocol
+        self.api_key = api_key
+        self.api_port = api_port
 
     @staticmethod
     def _address_object_name(ip: str) -> str:
@@ -210,8 +221,294 @@ class PaloAltoClient:
         logger.info("Commit successful on %s", self.host)
         return output
 
+    # ------------------------------------------------------------------
+    # HTTPS / PAN-OS XML API helpers
+    # ------------------------------------------------------------------
+
+    def _api_base_url(self) -> str:
+        """Return the base URL for the PAN-OS XML API."""
+        return f"https://{self.host}:{self.api_port}/api/"
+
+    def _api_add_address(self, ip: str) -> bool:
+        """Create an address object via the PAN-OS XML API.
+
+        Args:
+            ip: IP address (optionally with CIDR notation).
+
+        Returns:
+            True if the address was created successfully.
+
+        Raises:
+            PaloAltoError: If the API call fails.
+        """
+        obj_name = self._address_object_name(ip)
+        netmask = self._ip_to_netmask(ip)
+        xpath = (
+            "/config/devices/entry[@name='localhost.localdomain']"
+            "/vsys/entry[@name='vsys1']"
+            f"/address/entry[@name='{obj_name}']"
+        )
+        element = f"<ip-netmask>{netmask}</ip-netmask>"
+        params = {
+            "type": "config",
+            "action": "set",
+            "xpath": xpath,
+            "element": element,
+            "key": self.api_key,
+        }
+        resp = requests.get(
+            self._api_base_url(), params=params, verify=False, timeout=30,
+        )
+        if resp.status_code == 200 and "success" in resp.text.lower():
+            return True
+        raise PaloAltoError(
+            f"Failed to create address {obj_name}: HTTP {resp.status_code} {resp.text}"
+        )
+
+    def _api_add_to_group(self, ip_addresses: list) -> None:
+        """Add address objects to the address group via the PAN-OS XML API.
+
+        Args:
+            ip_addresses: List of IP addresses whose SOC_ objects should
+                be added to the group.
+
+        Raises:
+            PaloAltoError: If the API call fails.
+        """
+        group_name = self.address_group_name
+        xpath = (
+            "/config/devices/entry[@name='localhost.localdomain']"
+            "/vsys/entry[@name='vsys1']"
+            f"/address-group/entry[@name='{group_name}']/static"
+        )
+        members_xml = "".join(
+            f"<member>{self._address_object_name(ip)}</member>"
+            for ip in ip_addresses
+        )
+        params = {
+            "type": "config",
+            "action": "set",
+            "xpath": xpath,
+            "element": members_xml,
+            "key": self.api_key,
+        }
+        resp = requests.get(
+            self._api_base_url(), params=params, verify=False, timeout=30,
+        )
+        if resp.status_code == 200 and "success" in resp.text.lower():
+            return
+        raise PaloAltoError(
+            f"Failed to update group {group_name}: HTTP {resp.status_code} {resp.text}"
+        )
+
+    def _api_remove_from_group(self, ip_addresses: list) -> None:
+        """Remove address objects from the address group via the PAN-OS XML API.
+
+        Deletes each member entry from the address group's static list.
+
+        Args:
+            ip_addresses: List of IP addresses whose SOC_ objects should
+                be removed from the group.
+
+        Raises:
+            PaloAltoError: If the API call fails.
+        """
+        group_name = self.address_group_name
+        for ip in ip_addresses:
+            obj_name = self._address_object_name(ip)
+            xpath = (
+                "/config/devices/entry[@name='localhost.localdomain']"
+                "/vsys/entry[@name='vsys1']"
+                f"/address-group/entry[@name='{group_name}']"
+                f"/static/member[text()='{obj_name}']"
+            )
+            params = {
+                "type": "config",
+                "action": "delete",
+                "xpath": xpath,
+                "key": self.api_key,
+            }
+            resp = requests.get(
+                self._api_base_url(), params=params, verify=False, timeout=30,
+            )
+            # Treat 'success' or 'not found' as OK
+            if resp.status_code == 200:
+                continue
+            raise PaloAltoError(
+                f"Failed to remove {obj_name} from group {group_name}: "
+                f"HTTP {resp.status_code} {resp.text}"
+            )
+
+    def _api_remove_address(self, ip: str) -> bool:
+        """Delete an address object via the PAN-OS XML API.
+
+        Args:
+            ip: IP address (optionally with CIDR notation).
+
+        Returns:
+            True if the address was deleted successfully.
+
+        Raises:
+            PaloAltoError: If the API call fails.
+        """
+        obj_name = self._address_object_name(ip)
+        xpath = (
+            "/config/devices/entry[@name='localhost.localdomain']"
+            "/vsys/entry[@name='vsys1']"
+            f"/address/entry[@name='{obj_name}']"
+        )
+        params = {
+            "type": "config",
+            "action": "delete",
+            "xpath": xpath,
+            "key": self.api_key,
+        }
+        resp = requests.get(
+            self._api_base_url(), params=params, verify=False, timeout=30,
+        )
+        if resp.status_code == 200:
+            return True
+        raise PaloAltoError(
+            f"Failed to delete address {obj_name}: HTTP {resp.status_code} {resp.text}"
+        )
+
+    def _api_commit(self) -> None:
+        """Commit configuration changes via the PAN-OS XML API.
+
+        Raises:
+            PaloAltoError: If the commit fails.
+        """
+        params = {
+            "type": "commit",
+            "cmd": "<commit></commit>",
+            "key": self.api_key,
+        }
+        resp = requests.get(
+            self._api_base_url(), params=params, verify=False, timeout=120,
+        )
+        if resp.status_code == 200 and "success" in resp.text.lower():
+            logger.info("HTTPS API commit successful on %s", self.host)
+            return
+        raise PaloAltoError(
+            f"HTTPS API commit failed on {self.host}: HTTP {resp.status_code} {resp.text}"
+        )
+
+    # ------------------------------------------------------------------
+    # HTTPS bulk operations
+    # ------------------------------------------------------------------
+
+    def _api_add_rules_bulk(self, ip_addresses: list) -> dict:
+        """Create address objects and add them to the group via HTTPS API.
+
+        Args:
+            ip_addresses: List of IP addresses to block.
+
+        Returns:
+            Dict with 'success' and 'failed' lists.
+        """
+        results = {"success": [], "failed": []}
+        if not ip_addresses:
+            return results
+
+        for i in range(0, len(ip_addresses), BATCH_SIZE):
+            batch = ip_addresses[i:i + BATCH_SIZE]
+            created_ips = []
+            for ip in batch:
+                try:
+                    self._api_add_address(ip)
+                    created_ips.append(ip)
+                except Exception as e:
+                    results["failed"].append({"ip": ip, "error": str(e)})
+
+            if created_ips:
+                try:
+                    self._api_add_to_group(created_ips)
+                    results["success"].extend(created_ips)
+                except Exception as e:
+                    for ip in created_ips:
+                        results["failed"].append({"ip": ip, "error": str(e)})
+
+        # Commit after all changes
+        if results["success"]:
+            try:
+                self._api_commit()
+            except Exception as e:
+                # Move all success to failed since commit failed
+                for ip in results["success"]:
+                    results["failed"].append({"ip": ip, "error": str(e)})
+                results["success"] = []
+
+        added = len(results["success"])
+        failed = len(results["failed"])
+        logger.info(
+            "HTTPS bulk add on %s: %d added, %d failed",
+            self.host, added, failed,
+        )
+        return results
+
+    def _api_remove_rules_bulk(self, ip_addresses: list) -> dict:
+        """Remove address objects from the group and delete them via HTTPS API.
+
+        Args:
+            ip_addresses: List of IP addresses to unblock.
+
+        Returns:
+            Dict with 'success' and 'failed' lists.
+        """
+        results = {"success": [], "failed": []}
+        if not ip_addresses:
+            return results
+
+        for i in range(0, len(ip_addresses), BATCH_SIZE):
+            batch = ip_addresses[i:i + BATCH_SIZE]
+            try:
+                self._api_remove_from_group(batch)
+            except Exception as e:
+                for ip in batch:
+                    results["failed"].append({"ip": ip, "error": str(e)})
+                continue
+
+            for ip in batch:
+                try:
+                    self._api_remove_address(ip)
+                    results["success"].append(ip)
+                except Exception as e:
+                    results["failed"].append({"ip": ip, "error": str(e)})
+
+        # Commit after all changes
+        if results["success"]:
+            try:
+                self._api_commit()
+            except Exception as e:
+                for ip in results["success"]:
+                    results["failed"].append({"ip": ip, "error": str(e)})
+                results["success"] = []
+
+        removed = len(results["success"])
+        failed = len(results["failed"])
+        logger.info(
+            "HTTPS bulk remove on %s: %d removed, %d failed",
+            self.host, removed, failed,
+        )
+        return results
+
     def add_rules_bulk(self, ip_addresses: list) -> dict:
         """Create address objects, add to group, and commit.
+
+        Routes to HTTPS API or SSH implementation based on connection_protocol.
+
+        Args:
+            ip_addresses: List of IP addresses to block.
+
+        Returns:
+            Dict with 'success' and 'failed' lists.
+        """
+        if self.connection_protocol == "https":
+            return self._api_add_rules_bulk(ip_addresses)
+        return self._ssh_add_rules_bulk(ip_addresses)
+
+    def _ssh_add_rules_bulk(self, ip_addresses: list) -> dict:
+        """Create address objects, add to group, and commit via SSH.
 
         For each IP, creates an address object named ``SOC_<ip>`` with
         ip-netmask ``<ip>/32``, then adds it to the address group.
@@ -297,6 +594,21 @@ class PaloAltoClient:
     def remove_rules_bulk(self, ip_addresses: list) -> dict:
         """Remove address objects from group, delete them, and commit.
 
+        Routes to HTTPS API or SSH implementation based on connection_protocol.
+
+        Args:
+            ip_addresses: List of IP addresses to unblock.
+
+        Returns:
+            Dict with 'success' and 'failed' lists.
+        """
+        if self.connection_protocol == "https":
+            return self._api_remove_rules_bulk(ip_addresses)
+        return self._ssh_remove_rules_bulk(ip_addresses)
+
+    def _ssh_remove_rules_bulk(self, ip_addresses: list) -> dict:
+        """Remove address objects from group, delete them, and commit via SSH.
+
         For each IP, removes the address object from the address group,
         then deletes the address object. Issues a ``commit`` after all
         changes are made.
@@ -379,18 +691,42 @@ class PaloAltoClient:
         return results
 
     def check_health(self) -> bool:
-        """Verify SSH connectivity to the Palo Alto firewall.
+        """Verify connectivity to the Palo Alto firewall.
 
-        Connects via SSH and verifies the CLI prompt is available.
-        Palo Alto does not require enable mode.
+        When connection_protocol is 'ssh': connects via SSH and verifies
+        the CLI prompt is available.
+        When connection_protocol is 'https': makes a GET request to the
+        PAN-OS XML API to verify connectivity.
 
         Returns:
-            True if SSH connection succeeds, False otherwise.
+            True if connection succeeds, False otherwise.
         """
+        if self.connection_protocol == "https":
+            return self._api_check_health()
         try:
             client, shell = self._get_ssh_shell()
             client.close()
             return True
+        except Exception:
+            return False
+
+    def _api_check_health(self) -> bool:
+        """Verify HTTPS API connectivity to the Palo Alto firewall.
+
+        Makes a request to the PAN-OS XML API operational command endpoint.
+
+        Returns:
+            True if the API responds successfully, False otherwise.
+        """
+        try:
+            url = f"https://{self.host}:{self.api_port}/api/"
+            params = {
+                "type": "op",
+                "cmd": "<show><system><info></info></system></show>",
+                "key": self.api_key,
+            }
+            resp = requests.get(url, params=params, verify=False, timeout=10)
+            return resp.status_code == 200 and "success" in resp.text.lower()
         except Exception:
             return False
 

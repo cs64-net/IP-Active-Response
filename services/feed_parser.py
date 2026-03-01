@@ -7,6 +7,7 @@ and formatting IP sets back into standard blocklist file format.
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import time
 
@@ -70,26 +71,107 @@ class FeedParser:
             raise FeedFetchError(f"Error fetching {url}: {exc}")
 
         content = response.text
+        if not content or not content.strip():
+            raise FeedFetchError(f"Empty response body from {url}")
+
+        return self.parse_content(content)
+
+    def parse_content(self, content: str) -> FeedParseResult:
+        """Parse blocklist file content into a FeedParseResult.
+
+        Dispatches to the appropriate parser based on content format.
+        If the content is detected as NDJSON (first non-empty line is a JSON
+        object with a "cidr" key), delegates to _parse_ndjson; otherwise
+        delegates to _parse_text.
+
+        Returns FeedParseResult with ip_set, raw_line_count, valid_count, invalid_count.
+        """
+        if self._detect_ndjson(content):
+            return self._parse_ndjson(content)
+        return self._parse_text(content)
+
+    def _detect_ndjson(self, content: str) -> bool:
+        """Detect whether content is in NDJSON format.
+
+        Returns True if the first non-empty line is valid JSON containing a "cidr" key.
+        """
+        for line in content.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+                return isinstance(parsed, dict) and "cidr" in parsed
+            except (json.JSONDecodeError, ValueError):
+                return False
+        return False
+
+    def _parse_ndjson(self, content: str) -> FeedParseResult:
+        """Parse NDJSON content into a FeedParseResult.
+
+        Each line is expected to be a JSON object with a "cidr" key.
+        Lines with invalid JSON, missing "cidr" key, or invalid CIDR values
+        are counted as invalid and skipped.
+
+        Returns FeedParseResult with ip_set, raw_line_count, valid_count, invalid_count.
+        """
+        ip_set: set[str] = set()
         raw_line_count = len(content.splitlines())
-        ip_set = self.parse_content(content)
+        valid_count = 0
+        invalid_count = 0
+
+        for line in content.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+
+            # Try to parse JSON
+            try:
+                obj = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                invalid_count += 1
+                continue
+
+            # Extract "cidr" key
+            if not isinstance(obj, dict) or "cidr" not in obj:
+                invalid_count += 1
+                continue
+
+            cidr_value = obj["cidr"]
+
+            # Validate and normalize as IP network
+            try:
+                network = ipaddress.ip_network(cidr_value, strict=False)
+                normalized = str(network)
+                ip_set.add(normalized)
+                valid_count += 1
+            except (ValueError, TypeError):
+                invalid_count += 1
+                continue
 
         return FeedParseResult(
             ip_set=ip_set,
             raw_line_count=raw_line_count,
-            valid_count=len(ip_set),
+            valid_count=valid_count,
+            invalid_count=invalid_count,
         )
 
-    def parse_content(self, content: str) -> set[str]:
-        """Parse blocklist file content into a deduplicated set of valid IPs.
+
+    def _parse_text(self, content: str) -> FeedParseResult:
+        """Parse text blocklist content into a FeedParseResult with invalid line tracking.
 
         - Skips lines starting with # or ;
         - Skips blank lines
         - Trims whitespace
         - Handles inline comments (# or ;)
         - Validates each IP via BlocklistService.validate_ip()
-        - Returns normalized, deduplicated IP set
+        - Tracks invalid_count for non-comment, non-blank lines that fail validation
+        - Returns FeedParseResult with ip_set, raw_line_count, valid_count, invalid_count
         """
-        result: set[str] = set()
+        ip_set: set[str] = set()
+        raw_line_count = len(content.splitlines())
+        valid_count = 0
+        invalid_count = 0
 
         for line in content.splitlines():
             line = line.strip()
@@ -122,9 +204,18 @@ class FeedParser:
                     addr = ipaddress.ip_address(line)
                     suffix = "/128" if isinstance(addr, ipaddress.IPv6Address) else "/32"
                     normalized = str(addr) + suffix
-                result.add(normalized)
+                ip_set.add(normalized)
+                valid_count += 1
+            else:
+                invalid_count += 1
 
-        return result
+        return FeedParseResult(
+            ip_set=ip_set,
+            raw_line_count=raw_line_count,
+            valid_count=valid_count,
+            invalid_count=invalid_count,
+        )
+
 
     def format_blocklist(self, ip_set: set[str]) -> str:
         """Serialize a set of IPs into standard blocklist file format.

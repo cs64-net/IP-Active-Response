@@ -79,6 +79,16 @@ def _create_cisco_asa_client(device: dict):
 def _create_fortinet_client(device: dict):
     """Factory function for FortinetClient."""
     from clients.fortinet_client import FortinetClient
+    connection_protocol = device.get("connection_protocol", "ssh")
+    if connection_protocol == "https":
+        creds = json.loads(device.get("cloud_credentials", "{}"))
+        return FortinetClient(
+            host=device["hostname"],
+            address_group_name=device.get("group_name", "SOC_BLOCKLIST"),
+            connection_protocol="https",
+            api_key=creds.get("api_key", ""),
+            api_port=device.get("api_port", 443),
+        )
     return FortinetClient(
         host=device["hostname"],
         port=device.get("ssh_port", 22),
@@ -91,6 +101,16 @@ def _create_fortinet_client(device: dict):
 def _create_palo_alto_client(device: dict):
     """Factory function for PaloAltoClient."""
     from clients.palo_alto_client import PaloAltoClient
+    connection_protocol = device.get("connection_protocol", "ssh")
+    if connection_protocol == "https":
+        creds = json.loads(device.get("cloud_credentials", "{}"))
+        return PaloAltoClient(
+            host=device["hostname"],
+            address_group_name=device.get("group_name", "SOC_BLOCKLIST"),
+            connection_protocol="https",
+            api_key=creds.get("api_key", ""),
+            api_port=device.get("api_port", 443),
+        )
     return PaloAltoClient(
         host=device["hostname"],
         port=device.get("ssh_port", 22),
@@ -122,6 +142,8 @@ def _create_aws_waf_client(device: dict):
         region=device["cloud_region"],
         ip_set_name=device["cloud_resource_id"],
         ip_set_scope=creds.get("ip_set_scope", "REGIONAL"),
+        ipv4_ip_set_name=device.get("ipv4_group_name", ""),
+        ipv6_ip_set_name=device.get("ipv6_group_name", ""),
     )
 
 
@@ -163,6 +185,46 @@ def _create_oci_nsg_client(device: dict):
         nsg_ocid=device["cloud_resource_id"],
     )
 
+def _create_juniper_srx_client(device: dict):
+    """Factory function for JuniperSrxClient."""
+    from clients.juniper_srx_client import JuniperSrxClient
+    return JuniperSrxClient(
+        host=device["hostname"],
+        port=device.get("ssh_port", 22),
+        username=device["ssh_username"],
+        password=device["ssh_password"],
+        address_group_name=device.get("group_name", "SOC_BLOCKLIST"),
+        block_method=device.get("block_method", "address_group"),
+    )
+
+
+def _create_juniper_mx_client(device: dict):
+    """Factory function for JuniperMxClient."""
+    from clients.juniper_mx_client import JuniperMxClient
+    return JuniperMxClient(
+        host=device["hostname"],
+        port=device.get("ssh_port", 22),
+        username=device["ssh_username"],
+        password=device["ssh_password"],
+        address_group_name=device.get("group_name", "SOC_BLOCKLIST"),
+        block_method=device.get("block_method", "address_group"),
+    )
+
+
+def _create_checkpoint_client(device: dict):
+    """Factory function for CheckPointClient."""
+    from clients.checkpoint_client import CheckPointClient
+    creds = json.loads(device.get("cloud_credentials", "{}"))
+    return CheckPointClient(
+        host=device["hostname"],
+        api_port=device.get("api_port", 443),
+        username=device["ssh_username"],
+        password=device["ssh_password"],
+        object_group_name=device.get("group_name", "SOC_BLOCKLIST"),
+        domain=creds.get("domain", ""),
+    )
+
+
 
 
 # Registry mapping device_type strings to client factory functions.
@@ -179,6 +241,9 @@ CLIENT_REGISTRY = {
     "azure_nsg": _create_azure_nsg_client,
     "gcp_firewall": _create_gcp_firewall_client,
     "oci_nsg": _create_oci_nsg_client,
+    "juniper_srx": _create_juniper_srx_client,
+    "juniper_mx": _create_juniper_mx_client,
+    "checkpoint": _create_checkpoint_client,
 }
 
 # Maximum IPs to send per add_rules_bulk / remove_rules_bulk call.

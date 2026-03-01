@@ -8,6 +8,7 @@ differential synchronization.
 from __future__ import annotations
 
 import logging
+import string
 import time
 from urllib.parse import urlparse
 
@@ -24,17 +25,57 @@ logger = logging.getLogger(__name__)
 class FeedManager:
     """Orchestrates feed CRUD, validation, and refresh cycles."""
 
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: str = None, scheduler=None):
         """Initialize with database path.
 
         Args:
             db_path: Path to the SQLite database file. Defaults to Config.DATABASE_PATH.
+            scheduler: Optional FeedScheduler instance for cancelling jobs on deletion.
         """
         self.db_path = db_path
+        self.scheduler = scheduler
         self.blocklist_service = BlocklistService(db_path=db_path)
         self.feed_parser = FeedParser(self.blocklist_service)
         self.rules_engine = RulesEngine(db_path=db_path)
         self.diff_sync_engine = DiffSyncEngine(db_path=db_path, rules_engine=self.rules_engine)
+    @staticmethod
+    def _validate_url(url: str) -> None:
+        """Validate a feed URL has an acceptable scheme, hostname, and path.
+
+        Args:
+            url: The URL string to validate.
+
+        Raises:
+            ValueError: If the URL fails any validation check.
+        """
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"Feed URL must use http or https scheme, got '{parsed.scheme}'")
+        if not parsed.hostname:
+            raise ValueError("Feed URL must contain a valid hostname")
+        if not parsed.path or parsed.path == "/":
+            raise ValueError("Feed URL must contain a non-empty path (not just '/')")
+    @staticmethod
+    def _validate_name(name: str) -> None:
+        """Validate a feed name for length and character constraints.
+
+        Args:
+            name: The feed name to validate.
+
+        Raises:
+            ValueError: If the name is empty, too long, or contains control characters.
+        """
+        if not name or len(name) > 100:
+            raise ValueError(
+                "Feed name must be between 1 and 100 characters"
+            )
+        # Allow only printable ASCII (space 0x20 through tilde 0x7E)
+        for ch in name:
+            if ord(ch) < 32 or ord(ch) > 126:
+                raise ValueError(
+                    "Feed name must contain only printable characters (no control characters)"
+                )
+
 
     def create_feed(self, name: str, url: str, refresh_interval: int, enabled: bool = True) -> dict:
         """Validate URL, test fetch, create feed record.
@@ -55,10 +96,11 @@ class FeedManager:
         Returns:
             Dict representing the created feed record with ip_count.
         """
-        # Validate URL scheme
-        parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            raise ValueError(f"Feed URL must use http or https scheme, got '{parsed.scheme}'")
+        # Validate URL
+        self._validate_url(url)
+
+        # Validate name
+        self._validate_name(name)
 
         # Validate refresh interval
         if not isinstance(refresh_interval, int) or refresh_interval < 60 or refresh_interval > 86400:
@@ -139,9 +181,10 @@ class FeedManager:
 
         # Validate fields if provided
         if "url" in updates:
-            parsed = urlparse(updates["url"])
-            if parsed.scheme not in ("http", "https"):
-                raise ValueError(f"Feed URL must use http or https scheme, got '{parsed.scheme}'")
+            self._validate_url(updates["url"])
+
+        if "name" in updates:
+            self._validate_name(updates["name"])
 
         if "refresh_interval" in updates:
             interval = updates["refresh_interval"]
@@ -214,6 +257,13 @@ class FeedManager:
                 raise ValueError(f"Feed with id {feed_id} not found")
             feed_name = feed["name"]
 
+        # Cancel any scheduled refresh job before cleanup (Requirements 3.2)
+        if self.scheduler is not None:
+            try:
+                self.scheduler.cancel_feed(feed_id)
+            except Exception as e:
+                logger.warning("Failed to cancel scheduled job for feed %d: %s", feed_id, e)
+
         # Get current IPs for this feed and find exclusive ones
         previous_ips = self.diff_sync_engine._get_previous_ips(feed_id)
         exclusive_ips = [
@@ -222,6 +272,7 @@ class FeedManager:
         ]
 
         # Bulk remove exclusive IPs via RulesEngine if available
+        removal_errors = 0
         if exclusive_ips and self.diff_sync_engine.rules_engine:
             added_by = f"feed:{feed_name}"
             sorted_ips = sorted(exclusive_ips)
@@ -230,9 +281,10 @@ class FeedManager:
                 try:
                     self.diff_sync_engine.rules_engine.process_unblock(chunk, added_by)
                 except Exception as e:
-                    logger.error("Error removing IPs for deleted feed '%s': %s", feed_name, e)
+                    removal_errors += 1
+                    logger.error("Error removing chunk of %d IPs for deleted feed '%s': %s", len(chunk), feed_name, e)
 
-        # Remove feed_entries and feed record
+        # Remove feed_entries and feed record regardless of unblock failures
         with get_db(self.db_path) as conn:
             conn.execute("DELETE FROM feed_entries WHERE feed_id = ?", (feed_id,))
             conn.execute("DELETE FROM feeds WHERE id = ?", (feed_id,))
@@ -245,11 +297,12 @@ class FeedManager:
                 "feed_id": feed_id,
                 "name": feed_name,
                 "exclusive_ips_removed": len(exclusive_ips),
+                "removal_errors": removal_errors,
             },
         )
 
-        logger.info("Deleted feed '%s' (id=%d), removed %d exclusive IPs",
-                     feed_name, feed_id, len(exclusive_ips))
+        logger.info("Deleted feed '%s' (id=%d), removed %d exclusive IPs, %d removal errors",
+                     feed_name, feed_id, len(exclusive_ips), removal_errors)
 
     def get_feed(self, feed_id: int) -> dict:
         """Get a single feed by ID.
@@ -359,6 +412,42 @@ class FeedManager:
             if parse_result.valid_count == 0:
                 raise FeedFetchError("Feed returned zero valid IPs after parsing")
 
+            # Check for malformed feed (Requirement 2.4)
+            total_data_lines = parse_result.valid_count + parse_result.invalid_count
+            if total_data_lines > 0 and parse_result.invalid_count / total_data_lines > 0.5:
+                logger.warning(
+                    "Feed '%s' may be malformed: %d of %d data lines were invalid (%.0f%%)",
+                    feed_name,
+                    parse_result.invalid_count,
+                    total_data_lines,
+                    (parse_result.invalid_count / total_data_lines) * 100,
+                )
+
+            # IP count warning (Requirements 1.1, 1.2, 1.3, 1.5)
+            ip_count_warning = parse_result.valid_count > 500
+            ip_count_warning_message = None
+            if ip_count_warning:
+                ip_count_warning_message = (
+                    f"Warning: Feed '{feed_name}' contains {parse_result.valid_count} IPs. "
+                    f"Some platforms have limits on the number of IPs in an alias or "
+                    f"object-group and proceeding may cause instability."
+                )
+                logger.warning(
+                    "Feed '%s' contains %d IPs, exceeding the 500 IP threshold",
+                    feed_name,
+                    parse_result.valid_count,
+                )
+                _write_audit_log(
+                    self.db_path,
+                    event_type="feed_ip_count_warning",
+                    action=f"Feed '{feed_name}' contains {parse_result.valid_count} IPs (exceeds 500 threshold)",
+                    details={
+                        "feed_id": feed_id,
+                        "feed_name": feed_name,
+                        "ip_count": parse_result.valid_count,
+                    },
+                )
+
             # Compute diff
             diff = self.diff_sync_engine.compute_diff(feed_id, parse_result.ip_set)
 
@@ -400,6 +489,7 @@ class FeedManager:
                     "feed_name": feed_name,
                     "trigger": trigger,
                     "ips_parsed": parse_result.valid_count,
+                    "invalid_count": parse_result.invalid_count,
                     "ips_added": sync_result.ips_added,
                     "ips_removed": sync_result.ips_removed,
                     "duration": round(duration, 2),
@@ -412,10 +502,13 @@ class FeedManager:
                 "status": "success",
                 "trigger": trigger,
                 "ips_parsed": parse_result.valid_count,
+                "invalid_count": parse_result.invalid_count,
                 "ips_added": sync_result.ips_added,
                 "ips_removed": sync_result.ips_removed,
                 "duration": round(duration, 2),
                 "errors": sync_result.errors,
+                "ip_count_warning": ip_count_warning,
+                "ip_count_warning_message": ip_count_warning_message,
             }
 
         except Exception as e:

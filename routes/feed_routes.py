@@ -26,7 +26,7 @@ def init_feed_routes(feed_scheduler: FeedScheduler):
 
 def _get_feed_manager() -> FeedManager:
     """Create a FeedManager using the configured database path."""
-    return FeedManager(db_path=Config.DATABASE_PATH)
+    return FeedManager(db_path=Config.DATABASE_PATH, scheduler=_feed_scheduler)
 
 
 def _get_feed_scheduler() -> Optional[FeedScheduler]:
@@ -75,6 +75,9 @@ def add_feed():
         try:
             refresh_result = manager.refresh_feed(feed["id"], trigger="initial")
             ip_count = refresh_result.get("ips_added", 0)
+            # Flash IP count warning if present (Requirements 1.1, 1.3)
+            if refresh_result.get("ip_count_warning") and refresh_result.get("ip_count_warning_message"):
+                flash(refresh_result["ip_count_warning_message"], "warning")
         except Exception as refresh_err:
             logger.warning("Initial refresh for feed '%s' failed: %s", name, refresh_err)
             ip_count = feed.get('last_fetch_ip_count', 0)
@@ -150,11 +153,6 @@ def delete_feed(feed_id):
         feed = manager.get_feed(feed_id)
         feed_name = feed["name"]
 
-        # Cancel scheduled job
-        scheduler = _get_feed_scheduler()
-        if scheduler:
-            scheduler.cancel_feed(feed_id)
-
         manager.delete_feed(feed_id)
         flash(f"Feed '{feed_name}' deleted.")
     except ValueError as e:
@@ -208,6 +206,9 @@ def refresh_feed(feed_id):
                 f"Feed refreshed: {result.get('ips_parsed', 0)} IPs parsed, "
                 f"{result.get('ips_added', 0)} added, {result.get('ips_removed', 0)} removed."
             )
+            # Flash IP count warning if present (Requirements 1.1, 1.3)
+            if result.get("ip_count_warning") and result.get("ip_count_warning_message"):
+                flash(result["ip_count_warning_message"], "warning")
         else:
             flash(f"Feed refresh failed: {result.get('error', 'unknown error')}", "error")
     except ValueError as e:

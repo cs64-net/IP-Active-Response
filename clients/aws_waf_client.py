@@ -42,7 +42,9 @@ class AwsWafClient(BaseDeviceClient):
 
     def __init__(self, access_key: str, secret_key: str,
                  region: str, ip_set_name: str,
-                 ip_set_scope: str = "REGIONAL"):
+                 ip_set_scope: str = "REGIONAL",
+                 ipv4_ip_set_name: str = "",
+                 ipv6_ip_set_name: str = ""):
         """Initialise the AWS WAF client.
 
         Args:
@@ -51,10 +53,16 @@ class AwsWafClient(BaseDeviceClient):
             region: AWS region (e.g. ``us-east-1``).
             ip_set_name: Base name for the IP sets.
             ip_set_scope: ``REGIONAL`` or ``CLOUDFRONT``.
+            ipv4_ip_set_name: Explicit IPv4 IP set name. When provided,
+                overrides the auto-generated ``<ip_set_name>-ipv4`` name.
+            ipv6_ip_set_name: Explicit IPv6 IP set name. When provided,
+                overrides the auto-generated ``<ip_set_name>-ipv6`` name.
         """
         self.ip_set_name = ip_set_name
         self.ip_set_scope = ip_set_scope
         self.region = region
+        self._ipv4_ip_set_name = ipv4_ip_set_name.strip() if ipv4_ip_set_name else ""
+        self._ipv6_ip_set_name = ipv6_ip_set_name.strip() if ipv6_ip_set_name else ""
         self.wafv2 = boto3.client(
             "wafv2",
             aws_access_key_id=access_key,
@@ -139,9 +147,16 @@ class AwsWafClient(BaseDeviceClient):
     def _ip_set_versioned_name(self, version: str) -> str:
         """Return the IP set name for a given address version.
 
+        Uses the explicit IPv4/IPv6 name when provided, otherwise
+        falls back to auto-generating from the base ``ip_set_name``.
+
         Args:
             version: ``IPV4`` or ``IPV6``.
         """
+        if version == "IPV4" and self._ipv4_ip_set_name:
+            return self._ipv4_ip_set_name
+        if version == "IPV6" and self._ipv6_ip_set_name:
+            return self._ipv6_ip_set_name
         suffix = "ipv4" if version == "IPV4" else "ipv6"
         return f"{self.ip_set_name}-{suffix}"
 

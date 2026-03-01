@@ -2,6 +2,7 @@
 
 import atexit
 import logging
+import os
 import subprocess
 import sys
 import traceback
@@ -70,6 +71,7 @@ def create_app(config_class=Config):
     from routes.honeypot_routes import honeypot_bp
     from routes.dns_block_routes import dns_block_bp
     from routes.geo_routes import geo_bp
+    from routes.about_routes import about_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
@@ -82,6 +84,7 @@ def create_app(config_class=Config):
     app.register_blueprint(honeypot_bp)
     app.register_blueprint(dns_block_bp)
     app.register_blueprint(geo_bp)
+    app.register_blueprint(about_bp)
 
     # Global error handler for unhandled exceptions
     @app.errorhandler(500)
@@ -278,4 +281,4 @@ def _shutdown_all():
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(debug=True)
+    app.run(debug=os.environ.get("FLASK_DEBUG", "0") == "1")

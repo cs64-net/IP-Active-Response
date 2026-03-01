@@ -53,11 +53,18 @@ def index():
         logger.error("Error fetching blocklist: %s", e)
         blocklist = []
 
+    devices_fetch_ok = False
     try:
         devices = device_manager.get_all_devices()
+        devices_fetch_ok = True
     except Exception as e:
         logger.error("Error fetching devices: %s", e)
         devices = []
+
+    # Redirect to Devices page when no devices are registered (first-startup).
+    # On DB error (devices_fetch_ok=False), fall through to normal rendering (fail-open).
+    if devices_fetch_ok and len(devices) == 0:
+        return redirect(url_for("devices.devices_page"))
 
     total_blocked = len(blocklist)
     total_devices = len(devices)

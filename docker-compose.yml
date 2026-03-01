@@ -1,9 +1,9 @@
 services:
-  soc-ip-blocker:
+  active-ip-defence:
     build: .
-    container_name: soc-ip-blocker
+    container_name: active-ip-defence
     ports:
-      - "5000:5000"
+      - "8000:5000"
     volumes:
       - soc-data:/data
     environment:

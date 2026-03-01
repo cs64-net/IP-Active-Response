@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% block title %}About — IP Active Response{% endblock %}
+
+{% block extra_head %}
+<style>
+    .about-hero {
+        text-align: center;
+        padding: 2.5rem 0 1.5rem;
+        animation: fadeInUp 0.5s ease forwards;
+    }
+    .about-hero img { filter: drop-shadow(0 8px 30px rgba(99,102,241,0.3)); }
+    .about-version {
+        display: inline-block;
+        background: linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.15));
+        border: 1px solid rgba(99,102,241,0.25);
+        border-radius: 2rem;
+        padding: 0.3rem 1rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #a5b4fc;
+        letter-spacing: 0.5px;
+    }
+    .about-card {
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 1rem;
+        overflow: hidden;
+        animation: fadeInUp 0.5s ease forwards;
+        opacity: 0;
+    }
+    .about-card:nth-child(1) { animation-delay: 0.1s; }
+    .about-card:nth-child(2) { animation-delay: 0.2s; }
+    .about-card:nth-child(3) { animation-delay: 0.3s; }
+    .about-card:nth-child(4) { animation-delay: 0.4s; }
+    .about-card .card-body { padding: 1.25rem; }
+    .about-card h6 { font-weight: 700; }
+    .feature-icon {
+        width: 2.5rem; height: 2.5rem;
+        border-radius: 0.625rem;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 1.1rem;
+        flex-shrink: 0;
+    }
+    .suite-product {
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 0.75rem;
+        padding: 1rem;
+        transition: border-color 0.2s, box-shadow 0.2s;
+        animation: fadeInUp 0.5s ease forwards;
+        opacity: 0;
+    }
+    .suite-product:nth-child(1) { animation-delay: 0.5s; }
+    .suite-product:nth-child(2) { animation-delay: 0.6s; }
+    .suite-product:nth-child(3) { animation-delay: 0.7s; }
+    .suite-product:hover {
+        border-color: rgba(99,132,255,0.3);
+        box-shadow: 0 4px 20px rgba(99,132,255,0.08);
+    }
+    .disclaimer-bar {
+        background: rgba(245,158,11,0.06);
+        border: 1px solid rgba(245,158,11,0.2);
+        border-radius: 0.75rem;
+        padding: 0.75rem 1rem;
+        font-size: 0.8rem;
+        animation: fadeInUp 0.5s ease forwards;
+        animation-delay: 0.8s;
+        opacity: 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="about-hero">
+    <img src="{{ url_for('static', filename='logo.svg') }}" alt="" width="80" height="80" class="mb-3">
+    <h3 class="fw-bold mb-1">IP Active Response</h3>
+    <p class="text-muted small mb-2">Cyber Membrane Suite</p>
+    <span class="about-version">Version 0.1 Beta</span>
+</div>
+
+<p class="text-center text-muted small mb-4" style="max-width:600px;margin:0 auto;">
+    Rapid-response IP blocking for SOC teams. Push blocks across your entire network, deploy honeypots that auto-block attackers, and enforce geo-level restrictions — all from one interface.
+</p>
+
+<!-- Features Grid -->
+<div class="row g-3 mb-4">
+    <div class="col-md-6">
+        <div class="card about-card h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-start gap-3">
+                    <div class="feature-icon bg-danger bg-opacity-10 text-danger"><i class="bi bi-shield-slash"></i></div>
+                    <div>
+                        <h6 class="mb-1">Network-Wide IP Blocking</h6>
+                        <p class="text-muted small mb-0">Add an IP to the blocklist and push it to every managed device simultaneously. Supports pfSense, Cisco, Fortinet, Palo Alto, Juniper, and more.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card about-card h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-start gap-3">
+                    <div class="feature-icon bg-warning bg-opacity-10 text-warning"><i class="bi bi-bug"></i></div>
+                    <div>
+                        <h6 class="mb-1">Honeypot Auto-Block</h6>
+                        <p class="text-muted small mb-0">Deploy OpenCanary honeypots that report back. Attackers are automatically blocked across the entire network the moment they're detected.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card about-card h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-start gap-3">
+                    <div class="feature-icon bg-primary bg-opacity-10 text-primary"><i class="bi bi-geo-alt"></i></div>
+                    <div>
+                        <h6 class="mb-1">Geo & DNS Blocking</h6>
+                        <p class="text-muted small mb-0">Block entire countries using IP blocklists. Resolve malicious domains and block their IPs on devices that lack native DNS filtering.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card about-card h-100">
+            <div class="card-body">
+                <div class="d-flex align-items-start gap-3">
+                    <div class="feature-icon bg-success bg-opacity-10 text-success"><i class="bi bi-rss"></i></div>
+                    <div>
+                        <h6 class="mb-1">Threat Feeds & SIEM</h6>
+                        <p class="text-muted small mb-0">Subscribe to external blocklists with auto-refresh. Forward honeypot alerts to Elasticsearch or Syslog for centralised monitoring.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Start -->
+<div class="card about-card mb-4">
+    <div class="card-body">
+        <h6 class="mb-2"><i class="bi bi-lightning-charge me-2 text-warning"></i>Quick Start</h6>
+        <ol class="small text-muted mb-0" style="padding-left:1.2rem;">
+            <li class="mb-1">Add your network devices on the <strong>Devices</strong> page</li>
+            <li class="mb-1">Block IPs from the <strong>Dashboard</strong> — they push to all devices automatically</li>
+            <li class="mb-1">Set up honeypots on the <strong>Honey Pot</strong> page — attackers get blocked instantly</li>
+            <li>Subscribe to threat feeds on <strong>External Blocklists</strong> for automated protection</li>
+        </ol>
+    </div>
+</div>
+
+<!-- Other Cyber Membrane Solutions -->
+<h5 class="fw-bold mb-3"><i class="bi bi-grid me-2 text-primary"></i>Other Cyber Membrane Solutions</h5>
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="suite-product h-100">
+            <h6 class="fw-bold mb-1"><i class="bi bi-terminal me-2 text-info"></i>Rapid Action</h6>
+            <p class="text-muted small mb-0">Execute commands, change passwords, harden configurations, and detect backdoors across hundreds of devices. Multi-threaded execution via CSV import or manual entry with a full web interface.</p>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="suite-product h-100">
+            <h6 class="fw-bold mb-1"><i class="bi bi-shield-lock me-2 text-success"></i>Invariant Enforcement</h6>
+            <p class="text-muted small mb-0">Enforce configuration baselines across core network devices. Unauthorised changes are automatically reverted to a known-good state — ideal for defending against APTs and insider threats.</p>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="suite-product h-100">
+            <h6 class="fw-bold mb-1"><i class="bi bi-broadcast me-2 text-danger"></i>PulseScan</h6>
+            <p class="text-muted small mb-0">High-speed network scanner with real-time visualisation, high-risk port detection, and a full web interface for rapid network discovery and assessment.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Disclaimer -->
+<div class="disclaimer-bar text-center mb-3">
+    <i class="bi bi-exclamation-triangle text-warning me-1"></i>
+    <strong>Lab Edition</strong> — Not for commercial use.
+    For commercial licensing, contact
+    <span id="cm-contact" class="text-warning" style="cursor:pointer;text-decoration:underline dotted;" onclick="this.textContent=atob('Y3liZXJAY3M2NC5uZXQ=');">the Cyber Membrane team</span>.
+</div>
+{% endblock %}

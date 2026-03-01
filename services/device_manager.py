@@ -203,19 +203,25 @@ class DeviceManager:
             ).fetchone()
             return dict(row)
 
-    def add_fortinet(self, hostname: str, port: int, username: str,
-                     password: str,
+    def add_fortinet(self, hostname: str, port: int = 22, username: str = "",
+                     password: str = "",
                      address_group_name: str = "SOC_BLOCKLIST",
-                     friendly_name: str = "") -> Dict:
+                     friendly_name: str = "",
+                     connection_protocol: str = "ssh",
+                     api_key: str = "",
+                     api_port: int = 443) -> Dict:
         """Register a new Fortinet FortiGate firewall device.
 
         Args:
             hostname: IP or hostname of the Fortinet device.
-            port: SSH port.
-            username: SSH username.
-            password: SSH password.
+            port: SSH port (used when connection_protocol is 'ssh').
+            username: SSH username (used when connection_protocol is 'ssh').
+            password: SSH password (used when connection_protocol is 'ssh').
             address_group_name: Name of the address group to manage, defaults to SOC_BLOCKLIST.
             friendly_name: User-friendly display name.
+            connection_protocol: 'ssh' or 'https' (default 'ssh').
+            api_key: FortiOS REST API key (required when connection_protocol is 'https').
+            api_port: HTTPS API port (default 443, used when connection_protocol is 'https').
 
         Returns:
             Dict with the new device data.
@@ -226,10 +232,14 @@ class DeviceManager:
         missing = []
         if not hostname or not str(hostname).strip():
             missing.append("hostname")
-        if not username or not str(username).strip():
-            missing.append("username")
-        if not password or not str(password).strip():
-            missing.append("password")
+        if connection_protocol == "https":
+            if not api_key or not str(api_key).strip():
+                missing.append("api_key")
+        else:
+            if not username or not str(username).strip():
+                missing.append("username")
+            if not password or not str(password).strip():
+                missing.append("password")
         if missing:
             raise ValueError(f"Missing required fields: {', '.join(missing)}")
 
@@ -241,31 +251,42 @@ class DeviceManager:
             if existing:
                 raise ValueError(f"A fortinet device with hostname '{hostname}' already exists.")
 
+            cloud_credentials = ""
+            if connection_protocol == "https":
+                cloud_credentials = json.dumps({"api_key": api_key})
+
             conn.execute(
                 """INSERT INTO managed_devices
                    (hostname, device_type, block_method, ssh_port, ssh_username, ssh_password,
-                    group_name, friendly_name)
-                   VALUES (?, 'fortinet', 'alias_only', ?, ?, ?, ?, ?)""",
-                (hostname, port, username, password, address_group_name, friendly_name),
+                    group_name, friendly_name, connection_protocol, api_port, cloud_credentials)
+                   VALUES (?, 'fortinet', 'alias_only', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (hostname, port, username, password, address_group_name,
+                 friendly_name, connection_protocol, api_port, cloud_credentials),
             )
             row = conn.execute(
                 "SELECT * FROM managed_devices WHERE id = last_insert_rowid()"
             ).fetchone()
             return dict(row)
 
-    def add_palo_alto(self, hostname: str, port: int, username: str,
-                      password: str,
+    def add_palo_alto(self, hostname: str, port: int = 22, username: str = "",
+                      password: str = "",
                       address_group_name: str = "SOC_BLOCKLIST",
-                      friendly_name: str = "") -> Dict:
+                      friendly_name: str = "",
+                      connection_protocol: str = "ssh",
+                      api_key: str = "",
+                      api_port: int = 443) -> Dict:
         """Register a new Palo Alto Networks firewall device.
 
         Args:
             hostname: IP or hostname of the Palo Alto device.
-            port: SSH port.
-            username: SSH username.
-            password: SSH password.
+            port: SSH port (used when connection_protocol is 'ssh').
+            username: SSH username (used when connection_protocol is 'ssh').
+            password: SSH password (used when connection_protocol is 'ssh').
             address_group_name: Name of the address group to manage, defaults to SOC_BLOCKLIST.
             friendly_name: User-friendly display name.
+            connection_protocol: 'ssh' or 'https' (default 'ssh').
+            api_key: PAN-OS API key (required when connection_protocol is 'https').
+            api_port: HTTPS API port (default 443, used when connection_protocol is 'https').
 
         Returns:
             Dict with the new device data.
@@ -276,10 +297,14 @@ class DeviceManager:
         missing = []
         if not hostname or not str(hostname).strip():
             missing.append("hostname")
-        if not username or not str(username).strip():
-            missing.append("username")
-        if not password or not str(password).strip():
-            missing.append("password")
+        if connection_protocol == "https":
+            if not api_key or not str(api_key).strip():
+                missing.append("api_key")
+        else:
+            if not username or not str(username).strip():
+                missing.append("username")
+            if not password or not str(password).strip():
+                missing.append("password")
         if missing:
             raise ValueError(f"Missing required fields: {', '.join(missing)}")
 
@@ -291,12 +316,17 @@ class DeviceManager:
             if existing:
                 raise ValueError(f"A palo_alto device with hostname '{hostname}' already exists.")
 
+            cloud_credentials = ""
+            if connection_protocol == "https":
+                cloud_credentials = json.dumps({"api_key": api_key})
+
             conn.execute(
                 """INSERT INTO managed_devices
                    (hostname, device_type, block_method, ssh_port, ssh_username, ssh_password,
-                    group_name, friendly_name)
-                   VALUES (?, 'palo_alto', 'alias_only', ?, ?, ?, ?, ?)""",
-                (hostname, port, username, password, address_group_name, friendly_name),
+                    group_name, friendly_name, connection_protocol, api_port, cloud_credentials)
+                   VALUES (?, 'palo_alto', 'alias_only', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (hostname, port, username, password, address_group_name,
+                 friendly_name, connection_protocol, api_port, cloud_credentials),
             )
             row = conn.execute(
                 "SELECT * FROM managed_devices WHERE id = last_insert_rowid()"
@@ -358,7 +388,9 @@ class DeviceManager:
     def add_aws_waf(self, hostname: str, access_key: str, secret_key: str,
                     region: str, ip_set_name: str,
                     ip_set_scope: str = "REGIONAL",
-                    friendly_name: str = "") -> Dict:
+                    friendly_name: str = "",
+                    ipv4_ip_set_name: str = "",
+                    ipv6_ip_set_name: str = "") -> Dict:
         """Register an AWS WAF IP-set cloud device (Alpha).
 
         Args:
@@ -369,6 +401,10 @@ class DeviceManager:
             ip_set_name: Name of the WAF IP set.
             ip_set_scope: REGIONAL or CLOUDFRONT.
             friendly_name: User-friendly display name.
+            ipv4_ip_set_name: Explicit IPv4 IP set name. Defaults to
+                ``<ip_set_name>-ipv4`` when empty.
+            ipv6_ip_set_name: Explicit IPv6 IP set name. Defaults to
+                ``<ip_set_name>-ipv6`` when empty.
 
         Returns:
             Dict with the new device data.
@@ -383,6 +419,10 @@ class DeviceManager:
         if missing:
             raise ValueError(f"Missing required fields: {', '.join(missing)}")
 
+        # Auto-generate suffixed names when not explicitly provided
+        ipv4_name = ipv4_ip_set_name.strip() if ipv4_ip_set_name else f"{ip_set_name}-ipv4"
+        ipv6_name = ipv6_ip_set_name.strip() if ipv6_ip_set_name else f"{ip_set_name}-ipv6"
+
         with get_db(self.db_path) as conn:
             existing = conn.execute(
                 "SELECT id FROM managed_devices WHERE hostname = ? AND device_type = 'aws_waf'",
@@ -396,9 +436,11 @@ class DeviceManager:
             conn.execute(
                 """INSERT INTO managed_devices
                    (hostname, device_type, block_method, cloud_credentials,
-                    cloud_region, cloud_resource_id, friendly_name)
-                   VALUES (?, 'aws_waf', 'cloud_api', ?, ?, ?, ?)""",
-                (hostname, creds, region, ip_set_name, friendly_name),
+                    cloud_region, cloud_resource_id, friendly_name,
+                    ipv4_group_name, ipv6_group_name)
+                   VALUES (?, 'aws_waf', 'cloud_api', ?, ?, ?, ?, ?, ?)""",
+                (hostname, creds, region, ip_set_name, friendly_name,
+                 ipv4_name, ipv6_name),
             )
             row = conn.execute(
                 "SELECT * FROM managed_devices WHERE id = last_insert_rowid()"
@@ -560,6 +602,170 @@ class DeviceManager:
             ).fetchone()
             logger.info("Added oci_nsg device '%s' — this device type is in Alpha status.", hostname)
             return dict(row)
+
+    def add_juniper_srx(self, hostname: str, port: int, username: str,
+                        password: str,
+                        address_group_name: str = "SOC_BLOCKLIST",
+                        block_method: str = "address_group",
+                        friendly_name: str = "") -> Dict:
+        """Register a new Juniper SRX firewall device.
+
+        Args:
+            hostname: IP or hostname of the Juniper SRX device.
+            port: SSH port.
+            username: SSH username.
+            password: SSH password.
+            address_group_name: Name of the address group to manage, defaults to SOC_BLOCKLIST.
+            block_method: 'address_group' or 'null_route'.
+            friendly_name: User-friendly display name.
+
+        Returns:
+            Dict with the new device data.
+
+        Raises:
+            ValueError: If required fields are missing or device already exists.
+        """
+        missing = []
+        if not hostname or not str(hostname).strip():
+            missing.append("hostname")
+        if not username or not str(username).strip():
+            missing.append("username")
+        if not password or not str(password).strip():
+            missing.append("password")
+        if missing:
+            raise ValueError(f"Missing required fields: {', '.join(missing)}")
+
+        if block_method not in ("address_group", "null_route"):
+            raise ValueError(f"Invalid block_method '{block_method}'. Must be 'address_group' or 'null_route'.")
+
+        with get_db(self.db_path) as conn:
+            existing = conn.execute(
+                "SELECT id FROM managed_devices WHERE hostname = ? AND device_type = 'juniper_srx'",
+                (hostname,),
+            ).fetchone()
+            if existing:
+                raise ValueError(f"A juniper_srx device with hostname '{hostname}' already exists.")
+
+            conn.execute(
+                """INSERT INTO managed_devices
+                   (hostname, device_type, block_method, ssh_port, ssh_username, ssh_password,
+                    group_name, friendly_name)
+                   VALUES (?, 'juniper_srx', ?, ?, ?, ?, ?, ?)""",
+                (hostname, block_method, port, username, password, address_group_name, friendly_name),
+            )
+            row = conn.execute(
+                "SELECT * FROM managed_devices WHERE id = last_insert_rowid()"
+            ).fetchone()
+            return dict(row)
+
+    def add_juniper_mx(self, hostname: str, port: int, username: str,
+                       password: str,
+                       address_group_name: str = "SOC_BLOCKLIST",
+                       block_method: str = "address_group",
+                       friendly_name: str = "") -> Dict:
+        """Register a new Juniper MX router device.
+
+        Args:
+            hostname: IP or hostname of the Juniper MX device.
+            port: SSH port.
+            username: SSH username.
+            password: SSH password.
+            address_group_name: Name of the address group to manage, defaults to SOC_BLOCKLIST.
+            block_method: 'address_group' or 'null_route'.
+            friendly_name: User-friendly display name.
+
+        Returns:
+            Dict with the new device data.
+
+        Raises:
+            ValueError: If required fields are missing or device already exists.
+        """
+        missing = []
+        if not hostname or not str(hostname).strip():
+            missing.append("hostname")
+        if not username or not str(username).strip():
+            missing.append("username")
+        if not password or not str(password).strip():
+            missing.append("password")
+        if missing:
+            raise ValueError(f"Missing required fields: {', '.join(missing)}")
+
+        if block_method not in ("address_group", "null_route"):
+            raise ValueError(f"Invalid block_method '{block_method}'. Must be 'address_group' or 'null_route'.")
+
+        with get_db(self.db_path) as conn:
+            existing = conn.execute(
+                "SELECT id FROM managed_devices WHERE hostname = ? AND device_type = 'juniper_mx'",
+                (hostname,),
+            ).fetchone()
+            if existing:
+                raise ValueError(f"A juniper_mx device with hostname '{hostname}' already exists.")
+
+            conn.execute(
+                """INSERT INTO managed_devices
+                   (hostname, device_type, block_method, ssh_port, ssh_username, ssh_password,
+                    group_name, friendly_name)
+                   VALUES (?, 'juniper_mx', ?, ?, ?, ?, ?, ?)""",
+                (hostname, block_method, port, username, password, address_group_name, friendly_name),
+            )
+            row = conn.execute(
+                "SELECT * FROM managed_devices WHERE id = last_insert_rowid()"
+            ).fetchone()
+            return dict(row)
+
+    def add_checkpoint(self, hostname: str, api_port: int = 443,
+                       username: str = "", password: str = "",
+                       domain: str = "",
+                       object_group_name: str = "SOC_BLOCKLIST",
+                       friendly_name: str = "") -> Dict:
+        """Register a new Check Point firewall device.
+
+        Args:
+            hostname: IP or hostname of the Check Point management server.
+            api_port: API port (default 443).
+            username: Management API username (stored in ssh_username column).
+            password: Management API password (stored in ssh_password column).
+            domain: Optional domain for multi-domain server environments.
+            object_group_name: Name of the network group to manage, defaults to SOC_BLOCKLIST.
+            friendly_name: User-friendly display name.
+
+        Returns:
+            Dict with the new device data.
+
+        Raises:
+            ValueError: If required fields are missing or device already exists.
+        """
+        missing = []
+        if not hostname or not str(hostname).strip():
+            missing.append("hostname")
+        if not username or not str(username).strip():
+            missing.append("username")
+        if not password or not str(password).strip():
+            missing.append("password")
+        if missing:
+            raise ValueError(f"Missing required fields: {', '.join(missing)}")
+
+        with get_db(self.db_path) as conn:
+            existing = conn.execute(
+                "SELECT id FROM managed_devices WHERE hostname = ? AND device_type = 'checkpoint'",
+                (hostname,),
+            ).fetchone()
+            if existing:
+                raise ValueError(f"A checkpoint device with hostname '{hostname}' already exists.")
+
+            cloud_creds = json.dumps({"domain": domain}) if domain else ""
+            conn.execute(
+                """INSERT INTO managed_devices
+                   (hostname, device_type, block_method, ssh_username, ssh_password,
+                    api_port, group_name, cloud_credentials, friendly_name)
+                   VALUES (?, 'checkpoint', 'alias_only', ?, ?, ?, ?, ?, ?)""",
+                (hostname, username, password, api_port, object_group_name, cloud_creds, friendly_name),
+            )
+            row = conn.execute(
+                "SELECT * FROM managed_devices WHERE id = last_insert_rowid()"
+            ).fetchone()
+            return dict(row)
+
 
     def update_device(self, device_id: int, **kwargs) -> Dict:
         """Update device configuration fields.

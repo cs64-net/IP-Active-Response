@@ -11,6 +11,7 @@ class FeedParseResult:
     ip_set: set[str]
     raw_line_count: int
     valid_count: int
+    invalid_count: int = 0
     error: str | None = None
 
 

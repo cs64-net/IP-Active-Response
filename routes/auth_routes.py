@@ -42,6 +42,9 @@ def login():
 
         if user and verify_password(user["password_hash"], password):
             session["user"] = user["username"]
+            # Flag if using default credentials so we can prompt a password change
+            if username == "admin" and password == "admin":
+                session["must_change_password"] = True
             if is_ajax:
                 return jsonify({"success": True, "redirect": url_for("dashboard.index")})
             return redirect(url_for("dashboard.index"))
@@ -65,6 +68,14 @@ def logout():
     """Clear session and redirect to login page."""
     session.clear()
     return redirect(url_for("auth.login"))
+
+
+@auth_bp.route("/welcome-seen", methods=["POST"])
+@login_required
+def welcome_seen():
+    """Clear the welcome banner flag from the session."""
+    session.pop("show_welcome", None)
+    return jsonify({"success": True})
 
 
 @auth_bp.route("/users", methods=["GET"])
@@ -93,8 +104,8 @@ def add_user():
     if len(username) < 3:
         return jsonify({"success": False, "message": "Username must be at least 3 characters."}), 400
 
-    if len(password) < 6:
-        return jsonify({"success": False, "message": "Password must be at least 6 characters."}), 400
+    if len(password) < 10:
+        return jsonify({"success": False, "message": "Password must be at least 10 characters."}), 400
 
     from auth import hash_password
     try:
@@ -123,8 +134,8 @@ def change_password():
     current_password = (data.get("current_password") or "").strip()
     new_password = (data.get("new_password") or "").strip()
 
-    if not new_password or len(new_password) < 6:
-        return jsonify({"success": False, "message": "New password must be at least 6 characters."}), 400
+    if not new_password or len(new_password) < 10:
+        return jsonify({"success": False, "message": "New password must be at least 10 characters."}), 400
 
     current_user = session.get("user", "")
 
@@ -142,6 +153,8 @@ def change_password():
                 "UPDATE users SET password_hash = ? WHERE username = ?",
                 (hash_password(new_password), current_user),
             )
+        session.pop("must_change_password", None)
+        session["show_welcome"] = True
         return jsonify({"success": True, "message": "Password changed successfully."})
     else:
         # Admin changing another user's password - no current password needed

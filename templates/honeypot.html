@@ -928,6 +928,33 @@
     // Initialize Bootstrap tooltips
     var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
     tooltipTriggerList.forEach(function(el) { new bootstrap.Tooltip(el); });
+
+    // First-time honeypot explainer popup
+    if (!localStorage.getItem('honeypot-intro-seen')) {
+        var introHtml = '<div class="modal fade" id="honeypotIntroModal" tabindex="-1" aria-hidden="true">' +
+            '<div class="modal-dialog modal-dialog-centered modal-lg">' +
+            '<div class="modal-content" style="border-radius:1.25rem;border:1px solid rgba(99,102,241,0.2);overflow:hidden;">' +
+            '<div style="background:linear-gradient(135deg,rgba(99,102,241,0.08),rgba(245,158,11,0.06));padding:2rem 2rem 1rem;text-align:center;">' +
+            '<div style="width:4rem;height:4rem;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#fbbf24);display:inline-flex;align-items:center;justify-content:center;margin-bottom:1rem;box-shadow:0 8px 30px rgba(245,158,11,0.3);">' +
+            '<i class="bi bi-bug text-dark" style="font-size:1.5rem;"></i></div>' +
+            '<h4 class="fw-bold mb-1">Welcome to Honey Pot</h4>' +
+            '<p class="text-muted small mb-0">Automated attacker detection and blocking</p></div>' +
+            '<div class="modal-body px-4 pb-4 pt-3">' +
+            '<div class="row g-3 mb-3">' +
+            '<div class="col-md-4 text-center"><div style="width:2.5rem;height:2.5rem;border-radius:0.625rem;background:rgba(99,102,241,0.1);display:inline-flex;align-items:center;justify-content:center;margin-bottom:0.5rem;"><i class="bi bi-1-circle text-primary"></i></div><h6 class="fw-bold small">Deploy</h6><p class="text-muted small mb-0">Register an instance and deploy OpenCanary on your network using the setup wizard.</p></div>' +
+            '<div class="col-md-4 text-center"><div style="width:2.5rem;height:2.5rem;border-radius:0.625rem;background:rgba(245,158,11,0.1);display:inline-flex;align-items:center;justify-content:center;margin-bottom:0.5rem;"><i class="bi bi-2-circle text-warning"></i></div><h6 class="fw-bold small">Detect</h6><p class="text-muted small mb-0">When an attacker interacts with the honeypot, an alert is sent back here in real time.</p></div>' +
+            '<div class="col-md-4 text-center"><div style="width:2.5rem;height:2.5rem;border-radius:0.625rem;background:rgba(239,68,68,0.1);display:inline-flex;align-items:center;justify-content:center;margin-bottom:0.5rem;"><i class="bi bi-3-circle text-danger"></i></div><h6 class="fw-bold small">Block</h6><p class="text-muted small mb-0">The attacker\'s IP is automatically blocked across every managed device on your network.</p></div>' +
+            '</div>' +
+            '<div class="text-center"><button type="button" class="btn btn-primary px-4" id="honeypotIntroAck"><i class="bi bi-check-lg me-1"></i>Got it</button></div>' +
+            '</div></div></div></div>';
+        document.body.insertAdjacentHTML('beforeend', introHtml);
+        var introModal = new bootstrap.Modal(document.getElementById('honeypotIntroModal'));
+        introModal.show();
+        document.getElementById('honeypotIntroAck').addEventListener('click', function() {
+            localStorage.setItem('honeypot-intro-seen', '1');
+            introModal.hide();
+        });
+    }
 })();
 
 var currentWizardStep = 1;
