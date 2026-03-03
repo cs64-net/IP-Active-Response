@@ -91,17 +91,10 @@ Runs on `http://localhost:5000` with debug mode.
 | `SECRET_KEY` | `change-me-in-production` | Flask session secret |
 | `DATABASE_PATH` | `/data/soc_ip_blocker.db` | SQLite database path |
 
-## Running Tests
-
-```bash
-pip install -r requirements.txt
-python -m pytest tests/ -v
-```
-
 ## Architecture
 
 ```
-Flask App
+IP Active Response 
 ├── Auth (session-based, rate-limited)
 ├── Blocklist Service (IP validation, CRUD)
 ├── Push Engine (ThreadPoolExecutor, concurrent push)
