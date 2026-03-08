@@ -6,7 +6,6 @@
 <p align="center"><strong>Part of the Cyber Membrane Suite</strong></p>
 <p align="center">
   Rapid-response IP blocking for SOC teams. Push blocks across your entire network in seconds, deploy honeypots that automatically block attackers, and enforce geo-level IP restrictions — all from one interface.
-  For lab environments only, non commercially
 </p>
 
 ---
