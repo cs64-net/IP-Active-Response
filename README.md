@@ -44,18 +44,18 @@
 |---|---|
 | pfSense | Supported |
 | Cisco IOS | Supported |
-| Cisco ASA | Supported |
-| Linux (SSH) | Beta |
-| Fortinet FortiGate | Beta |
-| Palo Alto Networks | Beta |
-| Juniper SRX | Beta |
-| Juniper MX | Beta |
-| Check Point | Beta |
+| Cisco ASA | Alpha |
+| Linux (SSH) | Supported |
+| Fortinet FortiGate | Alpha |
+| Palo Alto Networks | Alpha |
+| Juniper SRX | Alpha |
+| Juniper MX | Alpha |
+| Check Point | Alpha |
 | Ubiquiti UniFi | Beta |
 | AWS WAF | Beta |
-| Azure NSG | Beta |
-| GCP Firewall | Beta |
-| OCI NSG | Beta |
+| Azure NSG | Alpha |
+| GCP Firewall | Alpha |
+| OCI NSG | Alpha |
 
 ## Quick Start (Docker)
 
