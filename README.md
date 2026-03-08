@@ -57,7 +57,7 @@
 | GCP Firewall | Alpha |
 | OCI NSG | Alpha |
 
-## Quick Start (Docker)
+## Install - Docker (Recommended) 
 
 ```bash
 # Clone the repository
@@ -75,7 +75,7 @@ open http://localhost:8000
 
 Default credentials: `admin` / `admin` — you'll be prompted to change the password on first login.
 
-## Manual Setup
+## Manual Setup (Not Recommended)
 
 ```bash
 pip install -r requirements.txt
