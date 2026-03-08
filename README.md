@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">IP Active Response</h1>
-<p align="center"><strong>Cyber Membrane Suite</strong></p>
+<p align="center"><strong>Part of the Cyber Membrane Suite</strong></p>
 <p align="center">
   Rapid-response IP blocking for SOC teams. Push blocks across your entire network in seconds, deploy honeypots that automatically block attackers, and enforce geo-level IP restrictions — all from one interface.
 </p>
