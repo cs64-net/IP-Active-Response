@@ -91,24 +91,6 @@ Runs on `http://localhost:5000` with debug mode.
 | `SECRET_KEY` | `change-me-in-production` | Flask session secret |
 | `DATABASE_PATH` | `/data/soc_ip_blocker.db` | SQLite database path |
 
-## Architecture
-
-```
-IP Active Response 
-├── Auth (session-based, rate-limited)
-├── Blocklist Service (IP validation, CRUD)
-├── Push Engine (ThreadPoolExecutor, concurrent push)
-├── Device Clients (pfSense, Cisco, Fortinet, Palo Alto, Juniper, Check Point, Cloud)
-├── Honeypot Manager (OpenCanary integration, auto-block)
-├── Feed Manager (external blocklists, NDJSON/text parsing)
-├── DNS Block Manager (domain resolution, stale IP cleanup)
-├── Geo-Blocking (country-level IP feeds via ipdeny.com)
-├── SIEM Forwarder (Elasticsearch, Syslog)
-├── Reconciliation Engine (drift detection & correction)
-├── Operation Queue (reliable background processing)
-└── SQLite Database (WAL mode, connection pooling)
-```
-
 ---
 
 <p align="center"><strong>Lab Edition</strong> — Not for commercial use.<br>
